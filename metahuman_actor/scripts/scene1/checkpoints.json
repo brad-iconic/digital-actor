@@ -1,0 +1,15 @@
+{
+  "nodes": [
+    {
+      "id": "player_introduced",
+      "type": "Query",
+      "target": "Player",
+      "query_str": "The player has introduced themselves or said hello to Ava.",
+      "narrator_message": {
+        "true": "The player has greeted Ava. She warms up and is ready to chat.",
+        "false": "Ava is still waiting for a friendly greeting."
+      },
+      "callbacks": ["player_introduced"]
+    }
+  ]
+}

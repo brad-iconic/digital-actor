@@ -1,0 +1,35 @@
+[project]
+name = "digital-actor"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "llm_lib",
+    "tts_lib",
+    "timer_stack",
+    "app-logging",
+    "langfuse-utils",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+]
+
+[tool.uv.sources]
+llm_lib = { git = "ssh://git@github.com/iconic-games/iconic-python-lib", subdirectory = "packages/llm_lib" }
+tts_lib = { git = "ssh://git@github.com/iconic-games/iconic-python-lib", subdirectory = "packages/tts_lib" }
+timer_stack = { git = "ssh://git@github.com/iconic-games/iconic-python-lib", subdirectory = "packages/timer_stack" }
+app-logging = { git = "ssh://git@github.com/iconic-games/iconic-python-lib", subdirectory = "packages/app_logging" }
+langfuse-utils = { git = "ssh://git@github.com/iconic-games/iconic-python-lib", subdirectory = "packages/langfuse_utils" }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["digital_actor"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

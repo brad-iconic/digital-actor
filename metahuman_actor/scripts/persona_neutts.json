@@ -1,0 +1,7 @@
+{
+  "id": "Zeek",
+  "display_name": "Zeek",
+  "voice": {
+    "provider": "neutts"
+  }
+}
