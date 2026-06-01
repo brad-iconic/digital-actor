@@ -100,6 +100,45 @@ class MetaHumanServer(WebSocketServer):
                         continue
                     logger.info("<<< say: %s", text[:80])
                     asyncio.create_task(self._say_with_error_reporting(ws, text))
+                elif msg.get("type") == "list_scenarios":
+                    from metahuman_actor.scenario import list_available_scenarios
+
+                    await ws.send(
+                        json.dumps(
+                            {
+                                "type": "scenarios",
+                                "names": list_available_scenarios(),
+                                "active": self._stage.scenario.name,
+                            }
+                        )
+                    )
+                elif msg.get("type") == "load_scenario":
+                    name = (msg.get("name") or "").strip()
+                    persona_variant = msg.get("persona") or None
+                    if not name:
+                        await ws.send(
+                            json.dumps(
+                                {
+                                    "type": "error",
+                                    "message": "load_scenario: empty name",
+                                }
+                            )
+                        )
+                        continue
+                    logger.info("<<< load_scenario: %s", name)
+                    try:
+                        await self._stage.load_scenario(
+                            name, persona_variant=persona_variant
+                        )
+                    except Exception as exc:
+                        logger.exception("load_scenario failed")
+                        await ws.send(
+                            json.dumps(
+                                {"type": "error", "message": f"load_scenario: {exc}"}
+                            )
+                        )
+                        continue
+                    await ws.send(json.dumps({"type": "scenario_loaded", "name": name}))
                 else:
                     await self._dispatch(msg, ws)
             except Exception as exc:
