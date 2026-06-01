@@ -34,14 +34,6 @@ class Settings(pydantic.BaseModel):
     def root(self) -> Path:
         return _ROOT
 
-    @property
-    def character_persona_path(self) -> Path:
-        return _ROOT / "metahuman_actor" / "scripts" / "persona.json"
-
-    @property
-    def script_path(self) -> Path:
-        return _ROOT / "metahuman_actor" / "scripts"
-
     @classmethod
     def load(cls) -> Settings:
         with open(_ROOT / "settings.yaml", encoding="utf-8") as f:

@@ -133,7 +133,12 @@ def _start_stdin_reader(loop: asyncio.AbstractEventLoop) -> asyncio.Queue[str | 
 
 
 async def _run(llm_model: str) -> None:
-    stage = MetaHumanStage(llm_model, messenger=TerminalMessenger(), tts_enabled=False)
+    stage = MetaHumanStage(
+        llm_model,
+        scenario_name=settings.default_scenario,
+        messenger=TerminalMessenger(),
+        tts_enabled=False,
+    )
     runtime = Runtime()
     runtime.subscribe(stage.step)
     runtime.start(tick_rate=20)
