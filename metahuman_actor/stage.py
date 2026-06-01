@@ -110,3 +110,31 @@ class MetaHumanStage(SingleSceneStage):
             self._scenario.name,
         )
         return True
+
+    async def load_scenario(
+        self, name: str, persona_variant: str | None = None
+    ) -> None:
+        """Tear down the current scene and rebuild for a different scenario.
+
+        Raises before any teardown if the new scenario / persona can't be
+        loaded — leaving the current state intact.
+        """
+        new_scenario = Scenario.load(name, persona_variant=persona_variant)
+        with open(new_scenario.persona_path, encoding="utf-8") as f:
+            persona = json.load(f)
+        # Drain any in-flight pipeline before we replace the actor/scene.
+        await self.await_idle()
+        self.reset()
+        self._scenario = new_scenario
+        self._persona_variant = persona_variant
+        self.actor = MetaHumanDigitalActor(persona)
+        scene_data = MetaHumanSceneData.load(
+            new_scenario, scene_idx=1, actor_name=self.actor.name
+        )
+        scene = MetaHumanSingleActorScene(
+            self.actor,
+            scene_data,
+            **new_scenario.settings.model_dump(exclude={"prompt_label"}),
+        )
+        self.register_scene(scene)
+        logger.info("Hot-swapped to scenario=%s", new_scenario.name)
