@@ -112,3 +112,21 @@ async def test_load_scenario_missing_returns_error(monkeypatch, tmp_path):
             assert server._stage.scenario.name == "default"
         finally:
             shutil.rmtree(dst_alt, ignore_errors=True)
+
+
+async def test_load_scenario_empty_name_returns_error(monkeypatch, tmp_path):
+    from langfuse_utils import fetch_all_prompts_from_project, langfuse_session
+
+    with langfuse_session(local=True):
+        fetch_all_prompts_from_project()
+        server, dst_alt = _make_server(monkeypatch, tmp_path)
+        try:
+            ws = _FakeWS([{"type": "load_scenario", "name": "  "}])
+            await server._handle_inbound(ws)
+            assert any(
+                m.get("type") == "error" and "empty name" in m.get("message", "")
+                for m in ws.sent
+            )
+            assert server._stage.scenario.name == "default"
+        finally:
+            shutil.rmtree(dst_alt, ignore_errors=True)

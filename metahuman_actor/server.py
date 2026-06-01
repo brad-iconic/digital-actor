@@ -7,6 +7,7 @@ from digital_actor.messenger import MessengerType, WebSocketServer
 from dotenv import load_dotenv
 from langfuse_utils import fetch_all_prompts_from_project, langfuse_session
 
+from metahuman_actor.scenario import list_available_scenarios
 from metahuman_actor.settings import settings
 from metahuman_actor.stage import MetaHumanStage
 
@@ -101,8 +102,6 @@ class MetaHumanServer(WebSocketServer):
                     logger.info("<<< say: %s", text[:80])
                     asyncio.create_task(self._say_with_error_reporting(ws, text))
                 elif msg.get("type") == "list_scenarios":
-                    from metahuman_actor.scenario import list_available_scenarios
-
                     await ws.send(
                         json.dumps(
                             {
