@@ -5,15 +5,18 @@ import shutil
 from pathlib import Path
 
 import pytest
-from dotenv import load_dotenv
 
 from metahuman_actor.settings import settings as global_settings
 
-# The stage builds a real LLM client, which requires the backend API key to be
-# present in the environment (mirrors how server.py / terminal.py bootstrap).
-load_dotenv()
-
 pytestmark = pytest.mark.asyncio
+
+
+@pytest.fixture(autouse=True)
+def _dummy_llm_key(monkeypatch):
+    # The stage constructs a real LLM client, which validates that the backend
+    # API key is present (no network call is made). Supply a dummy so the tests
+    # don't depend on a real key or a local .env in CI.
+    monkeypatch.setenv("CEREBRAS_API_KEY", "test-dummy-key")
 
 REPO_PROMPTS = Path(".langfuse_prompts/scenarios").resolve()
 LLM = "cerebras/qwen-3-235b-a22b-instruct-2507"
@@ -46,9 +49,9 @@ async def test_load_scenario_swaps_state(monkeypatch, tmp_path):
 
     tmp_data = _setup_data_scenarios(tmp_path)
     monkeypatch.setattr(global_settings, "scenarios_path", tmp_data, raising=False)
-    _copy_prompt_scenario("default", "alt", supplement_text="ALT_SUPPLEMENT {{actor_name}}")
 
     try:
+        _copy_prompt_scenario("default", "alt", supplement_text="ALT_SUPPLEMENT {{actor_name}}")
         with langfuse_session(local=True):
             fetch_all_prompts_from_project()
             stage = MetaHumanStage(LLM, scenario_name="default", tts_enabled=False)
