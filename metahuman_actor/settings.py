@@ -22,9 +22,15 @@ class DigitalActorServerSettings(pydantic.BaseModel):
 
 
 class Settings(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(arbitrary_types_allowed=True)
+
     digital_actor_server: DigitalActorServerSettings = pydantic.Field(
         default_factory=DigitalActorServerSettings
     )
+    scenarios_path: Path = pydantic.Field(
+        default_factory=lambda: _ROOT / "metahuman_actor" / "scenarios"
+    )
+    default_scenario: str = "default"
 
     @property
     def root(self) -> Path:
@@ -43,7 +49,10 @@ class Settings(pydantic.BaseModel):
         with open(_ROOT / "settings.yaml", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
         return cls.model_validate(
-            {"digital_actor_server": data.get("digital_actor_server", {})}
+            {
+                "digital_actor_server": data.get("digital_actor_server", {}),
+                "default_scenario": data.get("default_scenario", "default"),
+            }
         )
 
 
