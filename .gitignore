@@ -218,7 +218,7 @@ logs
 node_modules/
 
 # local prompts
-.langfuse_prompts/
+# .langfuse_prompts/
 
 # Narrative scripts (reference only, not version controlled)
 docs/script.md

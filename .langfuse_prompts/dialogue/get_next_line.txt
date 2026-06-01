@@ -1,0 +1,24 @@
+# Setting
+{{scene_back_story}}
+
+# Character
+{{character_back_story}}
+
+{{previous_scenes_wrapper}}# Current scene
+{{scene_description}}
+
+# Steering
+{{steer_back_instructions}}
+
+# Style
+{{scene_supplement}}
+
+# Speakers
+{{actors}}
+
+{{dialogue_summary_wrapper}}# Dialogue so far
+{{dialogue}}
+
+{{interrupt_instruction}}{{idle_instruction}}
+
+Continue the dialogue with the next single line of dialogue spoken by the character (not the player). Respond only with the line itself, no speaker label, no quotation marks.

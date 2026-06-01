@@ -1,0 +1,22 @@
+# Setting
+{{scene_back_story}}
+
+# Character
+{{character_back_story}}
+
+# Previous scenes
+{{previous_scenes_description}}
+
+# Current scene
+{{scene_description}}
+
+# Speakers
+{{actors}}
+
+# Existing summary
+{{existing_summary}}
+
+# New dialogue since the summary
+{{dialogue}}
+
+Update the existing summary by incorporating the new dialogue. Keep the result under 200 words. Preserve important earlier details while adding what is now relevant.

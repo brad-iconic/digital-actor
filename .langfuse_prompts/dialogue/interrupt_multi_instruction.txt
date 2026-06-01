@@ -1,0 +1,2 @@
+
+The player has now interrupted {{actor_name}} multiple times in a row. Show mild frustration or impatience while staying in character.

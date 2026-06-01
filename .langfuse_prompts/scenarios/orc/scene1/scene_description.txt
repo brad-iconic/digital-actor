@@ -1,0 +1,1 @@
+404 greets the player and tries to get a small conversation going. He wants to learn the player's name and what brings them here. The longer the player does not interact with him, to 404 falls into a steep decline about his grip on reality..
