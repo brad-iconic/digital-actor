@@ -22,8 +22,6 @@ class DigitalActorServerSettings(pydantic.BaseModel):
 
 
 class Settings(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(arbitrary_types_allowed=True)
-
     digital_actor_server: DigitalActorServerSettings = pydantic.Field(
         default_factory=DigitalActorServerSettings
     )

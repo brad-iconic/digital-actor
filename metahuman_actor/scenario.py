@@ -51,7 +51,7 @@ class Scenario:
         return self.data_root / f"scene{scene_idx}"
 
     @classmethod
-    def load(cls, name: str, persona_variant: str | None = None) -> "Scenario":
+    def load(cls, name: str, persona_variant: str | None = None) -> Scenario:
         data_root = settings.scenarios_path / name
         if not data_root.is_dir():
             raise ScenarioNotFoundError(name)
