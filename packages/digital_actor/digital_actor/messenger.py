@@ -35,9 +35,9 @@ Wire protocol (JSON for WebSocket, dict-equivalent for gRPC):
     {"type": "text",        "line_id": "...", "actor_name": "...", "text": "...",
                             "user_input_ack": bool, "interruptible": bool,
                             "emotion": str?, "intensity": str?}
-    {"type": "audio_chunk", "line_id": "...", "data": "<base64>",
+    {"type": "audio_chunk", "line_id": "...", "actor_name": "...", "data": "<base64>",
                             "sample_rate": int, "is_final": bool}
-    {"type": "audio_done",  "line_id": "..."}
+    {"type": "audio_done",  "line_id": "...", "actor_name": "..."}
     {"type": "game_event",  "name": "...", "info": {...}}
     {"type": "error",       "message": "..."}
     {"type": "pong"}
@@ -413,13 +413,18 @@ def _payload_to_ws_frame(payload: OutboundPayload) -> dict | None:
         return {
             "type": "audio_chunk",
             "line_id": payload.line_id,
+            "actor_name": payload.actor_name,
             "data": base64.b64encode(payload.audio_chunk).decode(),
             "sample_rate": payload.tts_sample_rate,
             "is_final": payload.is_final_audio,
         }
     if payload.is_final_audio:
         logger.info(">>> audio_done: line=%s", payload.line_id)
-        return {"type": "audio_done", "line_id": payload.line_id}
+        return {
+            "type": "audio_done",
+            "line_id": payload.line_id,
+            "actor_name": payload.actor_name,
+        }
     return None
 
 
