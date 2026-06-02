@@ -1,0 +1,2 @@
+
+The player just interrupted {{actor_name}}. Acknowledge the interruption briefly and naturally before continuing.

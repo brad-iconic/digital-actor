@@ -1,0 +1,2 @@
+Previously in this story:
+{{previous_scene_description}}

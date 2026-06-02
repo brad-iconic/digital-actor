@@ -1,0 +1,19 @@
+# Setting
+{{scene_back_story}}
+
+# Character
+{{character_back_story}}
+
+# Previous scenes
+{{previous_scenes_description}}
+
+# Current scene
+{{scene_description}}
+
+# Speakers
+{{actors}}
+
+# Dialogue to summarise
+{{dialogue}}
+
+Produce a concise third-person summary of the dialogue above, capturing what was said, decisions made, and the current emotional state. Keep it under 150 words.

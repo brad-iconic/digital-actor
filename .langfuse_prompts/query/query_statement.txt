@@ -1,0 +1,10 @@
+# Setting
+{{scene_back_story}}
+
+# Dialogue
+{{dialogue}}
+
+# Statement to evaluate
+{{statement}}
+
+Given the dialogue above, is the statement true? Answer YES or NO and nothing else.

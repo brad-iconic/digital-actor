@@ -132,8 +132,13 @@ def _start_stdin_reader(loop: asyncio.AbstractEventLoop) -> asyncio.Queue[str | 
     return queue
 
 
-async def _run(llm_model: str) -> None:
-    stage = MetaHumanStage(llm_model, messenger=TerminalMessenger(), tts_enabled=False)
+async def _run(llm_model: str, scenario: str | None = None) -> None:
+    stage = MetaHumanStage(
+        llm_model,
+        scenario_name=scenario or settings.default_scenario,
+        messenger=TerminalMessenger(),
+        tts_enabled=False,
+    )
     runtime = Runtime()
     runtime.subscribe(stage.step)
     runtime.start(tick_rate=20)
@@ -173,12 +178,12 @@ async def _run(llm_model: str) -> None:
         await runtime.stop()
 
 
-def main(llm_model: str) -> None:
+def main(llm_model: str, scenario: str | None = None) -> None:
     _install_query_console_handler()
     with langfuse_session(prompt_label=settings.digital_actor_server.prompt_label):
         fetch_all_prompts_from_project()
         try:
-            asyncio.run(_run(llm_model))
+            asyncio.run(_run(llm_model, scenario))
         except KeyboardInterrupt:
             print(_RESET)
 
@@ -186,5 +191,10 @@ def main(llm_model: str) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--llm", default="cerebras/qwen-3-235b-a22b-instruct-2507")
+    parser.add_argument(
+        "--scenario",
+        default=None,
+        help="Scenario to load. Defaults to settings.default_scenario.",
+    )
     args = parser.parse_args()
-    main(args.llm)
+    main(args.llm, args.scenario)

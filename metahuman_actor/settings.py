@@ -25,25 +25,24 @@ class Settings(pydantic.BaseModel):
     digital_actor_server: DigitalActorServerSettings = pydantic.Field(
         default_factory=DigitalActorServerSettings
     )
+    scenarios_path: Path = pydantic.Field(
+        default_factory=lambda: _ROOT / "metahuman_actor" / "scenarios"
+    )
+    default_scenario: str = "default"
 
     @property
     def root(self) -> Path:
         return _ROOT
-
-    @property
-    def character_persona_path(self) -> Path:
-        return _ROOT / "metahuman_actor" / "scripts" / "persona.json"
-
-    @property
-    def script_path(self) -> Path:
-        return _ROOT / "metahuman_actor" / "scripts"
 
     @classmethod
     def load(cls) -> Settings:
         with open(_ROOT / "settings.yaml", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
         return cls.model_validate(
-            {"digital_actor_server": data.get("digital_actor_server", {})}
+            {
+                "digital_actor_server": data.get("digital_actor_server", {}),
+                "default_scenario": data.get("default_scenario", "default"),
+            }
         )
 
 

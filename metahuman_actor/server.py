@@ -1,13 +1,13 @@
 import argparse
 import asyncio
 import json
-from pathlib import Path
 
 from app_logging import get_logger, setup_logging
 from digital_actor.messenger import MessengerType, WebSocketServer
 from dotenv import load_dotenv
 from langfuse_utils import fetch_all_prompts_from_project, langfuse_session
 
+from metahuman_actor.scenario import list_available_scenarios
 from metahuman_actor.settings import settings
 from metahuman_actor.stage import MetaHumanStage
 
@@ -33,8 +33,14 @@ class MetaHumanServer(WebSocketServer):
     on connect to clear any racey state from an in-flight tick that completed
     after the prior disconnect."""
 
-    def __init__(self, stage, *, port: int = 8788, http_port: int | None = 8789,
-                 tick_rate: int = 20) -> None:
+    def __init__(
+        self,
+        stage,
+        *,
+        port: int = 8788,
+        http_port: int | None = 8789,
+        tick_rate: int = 20,
+    ) -> None:
         super().__init__(stage, port=port, tick_rate=tick_rate)
         self._http_port = http_port
 
@@ -89,10 +95,49 @@ class MetaHumanServer(WebSocketServer):
                 elif msg.get("type") == "say":
                     text = (msg.get("text") or "").strip()
                     if not text:
-                        await ws.send(json.dumps({"type": "error", "message": "say: empty text"}))
+                        await ws.send(
+                            json.dumps({"type": "error", "message": "say: empty text"})
+                        )
                         continue
                     logger.info("<<< say: %s", text[:80])
                     asyncio.create_task(self._say_with_error_reporting(ws, text))
+                elif msg.get("type") == "list_scenarios":
+                    await ws.send(
+                        json.dumps(
+                            {
+                                "type": "scenarios",
+                                "names": list_available_scenarios(),
+                                "active": self._stage.scenario.name,
+                            }
+                        )
+                    )
+                elif msg.get("type") == "load_scenario":
+                    name = (msg.get("name") or "").strip()
+                    persona_variant = msg.get("persona") or None
+                    if not name:
+                        await ws.send(
+                            json.dumps(
+                                {
+                                    "type": "error",
+                                    "message": "load_scenario: empty name",
+                                }
+                            )
+                        )
+                        continue
+                    logger.info("<<< load_scenario: %s", name)
+                    try:
+                        await self._stage.load_scenario(
+                            name, persona_variant=persona_variant
+                        )
+                    except Exception as exc:
+                        logger.exception("load_scenario failed")
+                        await ws.send(
+                            json.dumps(
+                                {"type": "error", "message": f"load_scenario: {exc}"}
+                            )
+                        )
+                        continue
+                    await ws.send(json.dumps({"type": "scenario_loaded", "name": name}))
                 else:
                     await self._dispatch(msg, ws)
             except Exception as exc:
@@ -103,7 +148,6 @@ class MetaHumanServer(WebSocketServer):
         """Start the runtime, the WebSocket server, and the HTTP server."""
         import asyncio
 
-        import websockets
         from aiohttp import web
 
         from metahuman_actor.http_api import build_app
@@ -122,7 +166,9 @@ class MetaHumanServer(WebSocketServer):
                 await runner.setup()
                 site = web.TCPSite(runner, "localhost", self._http_port)
                 await site.start()
-                logger.info("HTTP TTS endpoint at http://localhost:%d/tts", self._http_port)
+                logger.info(
+                    "HTTP TTS endpoint at http://localhost:%d/tts", self._http_port
+                )
             await asyncio.gather(*tasks)
         finally:
             # Cancel the WS task if HTTP setup or gather raised so it
@@ -135,6 +181,7 @@ class MetaHumanServer(WebSocketServer):
 
     async def _serve_websocket(self) -> None:
         import websockets
+
         logger.info("Actor server listening on ws://localhost:%d", self._port)
         async with websockets.serve(self._handle_connection, "localhost", self._port):
             await asyncio.Future()
@@ -146,34 +193,15 @@ class MetaHumanServer(WebSocketServer):
             logger.info("Actor server stopped")
 
 
-def _resolve_persona(value: str | None) -> Path | None:
-    """Resolve --persona to a persona JSON path.
-
-    Accepts a short name like ``"neutts"`` (→ ``scripts/persona_neutts.json``)
-    or an absolute/relative path to a persona file. Returns ``None`` when
-    ``value`` is falsy so the stage falls back to ``settings.character_persona_path``.
-    """
-    if not value:
-        return None
-    candidate = Path(value)
-    if candidate.exists():
-        return candidate
-    named = settings.script_path / f"persona_{value}.json"
-    if named.exists():
-        return named
-    raise FileNotFoundError(
-        f"--persona {value!r}: neither {candidate} nor {named} exists"
-    )
-
-
 def main(
     port: int,
     llm_model: str,
     langfuse_local: bool = False,
     persona: str | None = None,
+    scenario: str | None = None,
     http_port: int | None = 8789,
 ) -> None:
-    persona_path = _resolve_persona(persona)
+    scenario_name = scenario or settings.default_scenario
     session = langfuse_session(
         prompt_label=settings.digital_actor_server.prompt_label,
         local=langfuse_local,
@@ -183,8 +211,9 @@ def main(
         MetaHumanServer(
             MetaHumanStage(
                 llm_model,
+                scenario_name=scenario_name,
                 messenger=MessengerType.WEBSOCKET,
-                persona_path=persona_path,
+                persona_variant=persona,
             ),
             port=port,
             http_port=http_port,
@@ -195,21 +224,34 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--llm", default="cerebras/qwen-3-235b-a22b-instruct-2507")
     parser.add_argument("--port", type=int, default=8788)
-    parser.add_argument("--http-port", type=int, default=8789,
-                        help="Port for the HTTP TTS endpoint. Default 8789.")
-    parser.add_argument("--no-http", action="store_true",
-                        help="Disable the HTTP TTS endpoint entirely.")
+    parser.add_argument(
+        "--http-port",
+        type=int,
+        default=8789,
+        help="Port for the HTTP TTS endpoint. Default 8789.",
+    )
+    parser.add_argument(
+        "--no-http", action="store_true", help="Disable the HTTP TTS endpoint entirely."
+    )
     parser.add_argument(
         "--langfuse-local",
         action="store_true",
         help="Load prompts from LOCAL_LANGFUSE_PATH (default: ./.langfuse_prompts) instead of remote Langfuse.",
     )
     parser.add_argument(
+        "--scenario",
+        default=None,
+        help=(
+            "Scenario to load (directory name under metahuman_actor/scenarios/). "
+            "Defaults to settings.default_scenario."
+        ),
+    )
+    parser.add_argument(
         "--persona",
         default=None,
         help=(
-            "Persona to load. Short name resolves to metahuman_actor/scripts/persona_<NAME>.json "
-            "(e.g. 'neutts', 'omnivoice'); a path is used as-is. Defaults to persona.json."
+            "Persona variant within the scenario. Short name resolves to "
+            "scenarios/<name>/persona_<variant>.json; omit to use persona.json."
         ),
     )
     args = parser.parse_args()
@@ -218,5 +260,6 @@ if __name__ == "__main__":
         llm_model=args.llm,
         langfuse_local=args.langfuse_local,
         persona=args.persona,
+        scenario=args.scenario,
         http_port=None if args.no_http else args.http_port,
     )

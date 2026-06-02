@@ -1,0 +1,13 @@
+# Scene
+{{scene_description}}
+
+# Speakers
+{{actors}}
+
+{{dialogue_summary_wrapper}}# Dialogue
+{{dialogue}}
+
+# Last line
+{{last_line}}
+
+Should the speaker of the last line naturally add a short followup remark right now (without waiting for the other speaker to reply)? Answer YES or NO and nothing else.

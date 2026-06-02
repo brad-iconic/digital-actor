@@ -1,3 +1,4 @@
+default_scenario: zeek
 digital_actor_server:
   prompt_label: production
   idle_timeout: 20
