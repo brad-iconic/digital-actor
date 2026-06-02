@@ -28,10 +28,16 @@ get_logger("digital_actor")
 
 
 class MetaHumanServer(WebSocketServer):
-    """Pauses the runtime + resets the stage on disconnect so the scene's
-    followup loop doesn't keep firing LLM calls between sessions. Also resets
-    on connect to clear any racey state from an in-flight tick that completed
-    after the prior disconnect."""
+    """WebSocket server with client-controlled scenario lifecycle.
+
+    Starts with no scenario loaded — the client requests one via the
+    `load_scenario` message. On disconnect, drains in-flight work and
+    unloads the scenario via `MetaHumanStage.unload_scenario`, returning
+    the stage to its empty state. Scenario-dependent inbound messages
+    (`start_game`, `say`, dispatched events) are rejected with an
+    `{"type": "error", "message": "no scenario loaded"}` frame when
+    no scenario is active.
+    """
 
     def __init__(
         self,
@@ -43,26 +49,22 @@ class MetaHumanServer(WebSocketServer):
     ) -> None:
         super().__init__(stage, port=port, tick_rate=tick_rate)
         self._http_port = http_port
+        self._pending_say_tasks: set[asyncio.Task] = set()
 
     async def _handle_connection(self, ws) -> None:
-        # On connect, wait for any in-flight response from a prior session to
-        # finish before clearing scene state, so reset() doesn't yank the rug
-        # out from under a still-running pipeline (which would leak state into
-        # the new session and could corrupt history / followup scheduling).
-        await self._stage.await_idle()
-        self._stage.reset()
+        # The stage starts empty (or was emptied by the prior disconnect).
+        # Nothing to drain on connect.
         self._runtime.resume()
         try:
             await super()._handle_connection(ws)
         finally:
             self._runtime.pause()
-            # Same on disconnect: a user_input task that was dispatched right
-            # before the socket closed may still be running (it was spawned
-            # via create_task in _dispatch and isn't tied to the connection).
-            # Wait for it to wind down before resetting state.
-            await self._stage.await_idle()
-            self._stage.reset()
-            logger.info("client disconnected; runtime paused, stage reset")
+            # Drain any in-flight say tasks before unloading so they can't
+            # race against the scene being nulled out.
+            if self._pending_say_tasks:
+                await asyncio.gather(*self._pending_say_tasks, return_exceptions=True)
+            await self._stage.unload_scenario()
+            logger.info("client disconnected; runtime paused, scenario unloaded")
 
     async def _say_with_error_reporting(self, ws, text: str) -> None:
         """Drive scene.say and surface any failure to the WS client.
@@ -89,29 +91,22 @@ class MetaHumanServer(WebSocketServer):
                 await ws.send(json.dumps({"type": "error", "message": "invalid JSON"}))
                 continue
             try:
-                if msg.get("type") == "start_game":
-                    logger.info("<<< start_game")
-                    await self._stage.deliver_opening_speech()
-                elif msg.get("type") == "say":
-                    text = (msg.get("text") or "").strip()
-                    if not text:
-                        await ws.send(
-                            json.dumps({"type": "error", "message": "say: empty text"})
-                        )
-                        continue
-                    logger.info("<<< say: %s", text[:80])
-                    asyncio.create_task(self._say_with_error_reporting(ws, text))
-                elif msg.get("type") == "list_scenarios":
+                msg_type = msg.get("type")
+                if msg_type == "list_scenarios":
+                    active = (
+                        self._stage.scenario.name if self._stage.scenario else None
+                    )
                     await ws.send(
                         json.dumps(
                             {
                                 "type": "scenarios",
                                 "names": list_available_scenarios(),
-                                "active": self._stage.scenario.name,
+                                "active": active,
                             }
                         )
                     )
-                elif msg.get("type") == "load_scenario":
+                    continue
+                if msg_type == "load_scenario":
                     name = (msg.get("name") or "").strip()
                     persona_variant = msg.get("persona") or None
                     if not name:
@@ -138,6 +133,31 @@ class MetaHumanServer(WebSocketServer):
                         )
                         continue
                     await ws.send(json.dumps({"type": "scenario_loaded", "name": name}))
+                    continue
+
+                # All remaining message types require a loaded scenario.
+                if self._stage.scenario is None:
+                    await ws.send(
+                        json.dumps(
+                            {"type": "error", "message": "no scenario loaded"}
+                        )
+                    )
+                    continue
+
+                if msg_type == "start_game":
+                    logger.info("<<< start_game")
+                    await self._stage.deliver_opening_speech()
+                elif msg_type == "say":
+                    text = (msg.get("text") or "").strip()
+                    if not text:
+                        await ws.send(
+                            json.dumps({"type": "error", "message": "say: empty text"})
+                        )
+                        continue
+                    logger.info("<<< say: %s", text[:80])
+                    task = asyncio.create_task(self._say_with_error_reporting(ws, text))
+                    self._pending_say_tasks.add(task)
+                    task.add_done_callback(self._pending_say_tasks.discard)
                 else:
                     await self._dispatch(msg, ws)
             except Exception as exc:
@@ -197,11 +217,8 @@ def main(
     port: int,
     llm_model: str,
     langfuse_local: bool = False,
-    persona: str | None = None,
-    scenario: str | None = None,
     http_port: int | None = 8789,
 ) -> None:
-    scenario_name = scenario or settings.default_scenario
     session = langfuse_session(
         prompt_label=settings.digital_actor_server.prompt_label,
         local=langfuse_local,
@@ -209,12 +226,7 @@ def main(
     with session:
         fetch_all_prompts_from_project()
         MetaHumanServer(
-            MetaHumanStage(
-                llm_model,
-                scenario_name=scenario_name,
-                messenger=MessengerType.WEBSOCKET,
-                persona_variant=persona,
-            ),
+            MetaHumanStage(llm_model, messenger=MessengerType.WEBSOCKET),
             port=port,
             http_port=http_port,
         ).run()
@@ -231,27 +243,16 @@ if __name__ == "__main__":
         help="Port for the HTTP TTS endpoint. Default 8789.",
     )
     parser.add_argument(
-        "--no-http", action="store_true", help="Disable the HTTP TTS endpoint entirely."
+        "--no-http",
+        action="store_true",
+        help="Disable the HTTP TTS endpoint entirely.",
     )
     parser.add_argument(
         "--langfuse-local",
         action="store_true",
-        help="Load prompts from LOCAL_LANGFUSE_PATH (default: ./.langfuse_prompts) instead of remote Langfuse.",
-    )
-    parser.add_argument(
-        "--scenario",
-        default=None,
         help=(
-            "Scenario to load (directory name under metahuman_actor/scenarios/). "
-            "Defaults to settings.default_scenario."
-        ),
-    )
-    parser.add_argument(
-        "--persona",
-        default=None,
-        help=(
-            "Persona variant within the scenario. Short name resolves to "
-            "scenarios/<name>/persona_<variant>.json; omit to use persona.json."
+            "Load prompts from LOCAL_LANGFUSE_PATH (default: ./.langfuse_prompts) "
+            "instead of remote Langfuse."
         ),
     )
     args = parser.parse_args()
@@ -259,7 +260,5 @@ if __name__ == "__main__":
         port=args.port,
         llm_model=args.llm,
         langfuse_local=args.langfuse_local,
-        persona=args.persona,
-        scenario=args.scenario,
         http_port=None if args.no_http else args.http_port,
     )

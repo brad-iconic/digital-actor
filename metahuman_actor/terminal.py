@@ -6,8 +6,8 @@ without spinning up the front end and proxy.
 
 Usage::
 
-    uv run python -m metahuman_actor.terminal
-    uv run python -m metahuman_actor.terminal --llm cerebras/qwen-3-235b-a22b-instruct-2507
+    uv run python -m metahuman_actor.terminal --scenario zeek
+    uv run python -m metahuman_actor.terminal --scenario zeek --llm cerebras/qwen-3-235b-a22b-instruct-2507
 
 In-session commands:
     /quit | /exit | /q   — end the session
@@ -132,16 +132,17 @@ def _start_stdin_reader(loop: asyncio.AbstractEventLoop) -> asyncio.Queue[str | 
     return queue
 
 
-async def _run(llm_model: str, scenario: str | None = None) -> None:
+async def _run(llm_model: str, scenario: str) -> None:
     stage = MetaHumanStage(
         llm_model,
-        scenario_name=scenario or settings.default_scenario,
         messenger=TerminalMessenger(),
         tts_enabled=False,
     )
     runtime = Runtime()
     runtime.subscribe(stage.step)
     runtime.start(tick_rate=20)
+
+    await stage.load_scenario(scenario)
 
     _print_banner(stage.actor.name)
 
@@ -178,7 +179,7 @@ async def _run(llm_model: str, scenario: str | None = None) -> None:
         await runtime.stop()
 
 
-def main(llm_model: str, scenario: str | None = None) -> None:
+def main(llm_model: str, scenario: str) -> None:
     _install_query_console_handler()
     with langfuse_session(prompt_label=settings.digital_actor_server.prompt_label):
         fetch_all_prompts_from_project()
@@ -193,8 +194,11 @@ if __name__ == "__main__":
     parser.add_argument("--llm", default="cerebras/qwen-3-235b-a22b-instruct-2507")
     parser.add_argument(
         "--scenario",
-        default=None,
-        help="Scenario to load. Defaults to settings.default_scenario.",
+        required=True,
+        help=(
+            "Scenario to load (directory name under metahuman_actor/scenarios/). "
+            "Required — there is no default."
+        ),
     )
     args = parser.parse_args()
     main(args.llm, args.scenario)

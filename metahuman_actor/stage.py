@@ -5,6 +5,7 @@ from app_logging import get_logger
 from digital_actor.game_events import GameEventBase, PlayerInterruptEvent
 from digital_actor.messenger import Messenger, MessengerType
 from digital_actor.stage import SingleSceneStage
+from tts_lib import get_tts_client
 
 from metahuman_actor.actor import MetaHumanDigitalActor
 from metahuman_actor.data_models import MetaHumanSceneData
@@ -20,43 +21,31 @@ class MetaHumanStage(SingleSceneStage):
     def __init__(
         self,
         llm_model: str,
-        scenario_name: str,
         messenger: Messenger | MessengerType | None = None,
         tts_enabled: bool = True,
-        persona_variant: str | None = None,
     ) -> None:
-        scenario = Scenario.load(scenario_name, persona_variant=persona_variant)
-        with open(scenario.persona_path, encoding="utf-8") as f:
-            persona = json.load(f)
-        voice = (persona.get("voice") or {}) if tts_enabled else {}
         super().__init__(
             llm_model,
-            tts_provider=voice.get("provider"),
-            tts_voice_id=voice.get("voice_id"),
-            tts_model_id=voice.get("model_id"),
+            tts_provider=None,
+            tts_voice_id=None,
+            tts_model_id=None,
             messenger=messenger,
         )
-        self._scenario = scenario
-        self._persona_variant = persona_variant
-        self.actor = MetaHumanDigitalActor(persona)
-        scene_data = MetaHumanSceneData.load(
-            scenario, scene_idx=1, actor_name=self.actor.name
-        )
-        scene = MetaHumanSingleActorScene(
-            self.actor,
-            scene_data,
-            **scenario.settings.model_dump(exclude={"prompt_label"}),
-        )
-        self.register_scene(scene)
-        logger.info("Stage ready with scenario=%s", scenario.name)
+        self._scenario: Scenario | None = None
+        self._persona_variant: str | None = None
+        self.actor: MetaHumanDigitalActor | None = None
+        self._tts_enabled = tts_enabled
+        logger.info("Stage ready (no scenario loaded)")
         sys.stdout.flush()
 
     @property
-    def scenario(self) -> Scenario:
+    def scenario(self) -> Scenario | None:
         return self._scenario
 
     @property
-    def scene_data(self) -> MetaHumanSceneData:
+    def scene_data(self) -> MetaHumanSceneData | None:
+        if self._scene is None:
+            return None
         return self._scene.scene_data
 
     async def on_game_event(self, event: GameEventBase) -> None:
@@ -66,13 +55,13 @@ class MetaHumanStage(SingleSceneStage):
         else:
             await super().on_game_event(event)
 
-        if self._scene.is_finished():
+        if self._scene is not None and self._scene.is_finished():
             if self.load_next_scene():
                 await self.deliver_opening_speech()
 
     async def on_user_input(self, message: str) -> None:
         await super().on_user_input(message)
-        if self._scene.is_finished():
+        if self._scene is not None and self._scene.is_finished():
             if self.load_next_scene():
                 await self.deliver_opening_speech()
 
@@ -81,6 +70,8 @@ class MetaHumanStage(SingleSceneStage):
             await self._scene.deliver_opening_speech()
 
     def load_next_scene(self) -> bool:
+        if self._scenario is None or self._scene is None or self.actor is None:
+            return False
         previous_completed = set(self._scene.scene_data.checkpoints.completed)
         next_scene_idx = self._scene.scene_data.scene_idx + 1
         next_scene_dir = self._scenario.scene_dir(next_scene_idx)
@@ -114,27 +105,59 @@ class MetaHumanStage(SingleSceneStage):
     async def load_scenario(
         self, name: str, persona_variant: str | None = None
     ) -> None:
-        """Tear down the current scene and rebuild for a different scenario.
+        """Load or hot-swap a scenario. Atomic: builds new state locally and
+        only swaps in after every construction step succeeds — so a failure
+        leaves the prior state (empty or loaded) untouched.
 
-        Raises before any teardown if the new scenario / persona can't be
-        loaded — leaving the current state intact.
+        Rebuilds the TTS client from the scenario's persona.voice, so
+        scenarios with different voice configs work correctly across loads.
         """
         new_scenario = Scenario.load(name, persona_variant=persona_variant)
         with open(new_scenario.persona_path, encoding="utf-8") as f:
             persona = json.load(f)
-        # Drain any in-flight pipeline before we replace the actor/scene.
-        await self.await_idle()
+        voice = (persona.get("voice") or {}) if self._tts_enabled else {}
+        new_actor = MetaHumanDigitalActor(persona)
+        new_scene_data = MetaHumanSceneData.load(
+            new_scenario, scene_idx=1, actor_name=new_actor.name
+        )
+        new_tts = (
+            get_tts_client(
+                voice.get("provider"),
+                voice_id=voice.get("voice_id"),
+                model_id=voice.get("model_id"),
+            )
+            if voice.get("provider")
+            else None
+        )
+        new_scene = MetaHumanSingleActorScene(
+            new_actor,
+            new_scene_data,
+            **new_scenario.settings.model_dump(exclude={"prompt_label"}),
+        )
+
+        # Construction succeeded — drain any in-flight pipeline before swap.
+        if self._scenario is not None:
+            await self.await_idle()
         self.reset()
         self._scenario = new_scenario
         self._persona_variant = persona_variant
-        self.actor = MetaHumanDigitalActor(persona)
-        scene_data = MetaHumanSceneData.load(
-            new_scenario, scene_idx=1, actor_name=self.actor.name
-        )
-        scene = MetaHumanSingleActorScene(
-            self.actor,
-            scene_data,
-            **new_scenario.settings.model_dump(exclude={"prompt_label"}),
-        )
-        self.register_scene(scene)
-        logger.info("Hot-swapped to scenario=%s", new_scenario.name)
+        self.actor = new_actor
+        self._tts_client = new_tts
+        self.register_scene(new_scene)
+        logger.info("Loaded scenario=%s", new_scenario.name)
+
+    async def unload_scenario(self) -> None:
+        """Drain in-flight work and drop scenario, actor, scene, TTS client.
+
+        Safe to call when nothing is loaded (no-op).
+        """
+        if self._scenario is None:
+            return
+        await self.await_idle()
+        self.reset()
+        self._scene = None
+        self._scenario = None
+        self._persona_variant = None
+        self.actor = None
+        self._tts_client = None
+        logger.info("Unloaded scenario")

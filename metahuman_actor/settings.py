@@ -28,7 +28,6 @@ class Settings(pydantic.BaseModel):
     scenarios_path: Path = pydantic.Field(
         default_factory=lambda: _ROOT / "metahuman_actor" / "scenarios"
     )
-    default_scenario: str = "default"
 
     @property
     def root(self) -> Path:
@@ -41,7 +40,6 @@ class Settings(pydantic.BaseModel):
         return cls.model_validate(
             {
                 "digital_actor_server": data.get("digital_actor_server", {}),
-                "default_scenario": data.get("default_scenario", "default"),
             }
         )
 

@@ -133,7 +133,3 @@ def test_list_returns_dirs_with_persona(tmp_path, monkeypatch):
 def test_list_returns_empty_when_dir_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(global_settings, "scenarios_path", tmp_path / "missing", raising=False)
     assert list_available_scenarios() == []
-
-
-def test_default_scenario_field_is_string():
-    assert isinstance(global_settings.default_scenario, str)
