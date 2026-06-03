@@ -65,6 +65,7 @@ class GameDrivenScene(BaseScene):
         world_state: dict | None,
         emotions: list[str] | None = None,
     ) -> DialogueLine:
+        """No-hint convenience wrapper. Use respond_with_hint to request a followup hint."""
         line, _ = await self.respond_with_hint(
             text, world_state, emotions=emotions, request_followup_hint=False
         )
@@ -96,11 +97,9 @@ class GameDrivenScene(BaseScene):
         name: str,
         info: dict[str, str],
         world_state: dict | None,
-        request_followup_hint: bool = False,
     ) -> DialogueLine:
-        line, _ = await self.trigger_with_hint(
-            name, info, world_state, request_followup_hint=False
-        )
+        """No-hint convenience wrapper. Use trigger_with_hint to request a followup hint."""
+        line, _ = await self.trigger_with_hint(name, info, world_state)
         return line
 
     async def trigger_with_hint(
