@@ -6,6 +6,7 @@ behaviour. Lines are produced only when the game calls respond()/trigger().
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 
 from app_logging import get_logger
 from digital_actor.data_models import PromptInfo
@@ -17,6 +18,13 @@ from metahuman_actor.game_driven.scene_data import GameDrivenSceneData
 from metahuman_actor.game_driven.world_state import render_world_state
 
 logger = get_logger(__name__)
+
+
+@dataclass(frozen=True)
+class FollowupHint:
+    line_id: str
+    available: bool
+    suggested_delay_seconds: float
 
 
 class GameDrivenScene(BaseScene):
@@ -57,6 +65,18 @@ class GameDrivenScene(BaseScene):
         world_state: dict | None,
         emotions: list[str] | None = None,
     ) -> DialogueLine:
+        line, _ = await self.respond_with_hint(
+            text, world_state, emotions=emotions, request_followup_hint=False
+        )
+        return line
+
+    async def respond_with_hint(
+        self,
+        text: str,
+        world_state: dict | None,
+        emotions: list[str] | None = None,
+        request_followup_hint: bool = False,
+    ) -> tuple[DialogueLine, "FollowupHint | None"]:
         if not text or not text.strip():
             raise ValueError("respond: empty text")
         async with self._response_lock:
@@ -67,8 +87,9 @@ class GameDrivenScene(BaseScene):
                 trigger_prompt=None,
             )
             line = await self._generate_and_deliver(prompt_info, emotions)
+            hint = await self._maybe_followup_hint(line, request_followup_hint)
             await self.actor.history.summarize_if_needed()
-            return line
+            return line, hint
 
     async def trigger(
         self,
@@ -77,6 +98,18 @@ class GameDrivenScene(BaseScene):
         world_state: dict | None,
         request_followup_hint: bool = False,
     ) -> DialogueLine:
+        line, _ = await self.trigger_with_hint(
+            name, info, world_state, request_followup_hint=False
+        )
+        return line
+
+    async def trigger_with_hint(
+        self,
+        name: str,
+        info: dict[str, str],
+        world_state: dict | None,
+        request_followup_hint: bool = False,
+    ) -> tuple[DialogueLine, "FollowupHint | None"]:
         config = self.scene_data.triggers[name]  # KeyError -> caller emits error frame
         async with self._response_lock:
             narrator = config.render_narrator(info)
@@ -89,8 +122,61 @@ class GameDrivenScene(BaseScene):
                 trigger_prompt=config.render_prompt(info),
             )
             line = await self._generate_and_deliver(prompt_info, emotions=None)
+            hint = await self._maybe_followup_hint(line, request_followup_hint)
             await self.actor.history.summarize_if_needed()
-            return line
+            return line, hint
+
+    # --- followup hint ---
+
+    async def _maybe_followup_hint(
+        self, line: DialogueLine, request_followup_hint: bool
+    ) -> "FollowupHint | None":
+        if not request_followup_hint:
+            return None
+        try:
+            available = await self._query_followup()
+        except Exception:
+            logger.exception("followup query failed; emitting no hint")
+            return None
+        return FollowupHint(
+            line_id=line.line_id,
+            available=available,
+            suggested_delay_seconds=self.suggested_delay_seconds,
+        )
+
+    async def _query_followup(self) -> bool:
+        from digital_actor.stage_context import stage_context
+
+        prompt_info = self._build_followup_prompt()
+        response = await stage_context.llm_acomplete(prompt_info, obs_name="query_followup")
+        return response.strip().lower() in ("yes", "true")
+
+    def _build_followup_prompt(self) -> PromptInfo:
+        history = self.actor.history
+        last = history.last_actor_line()
+        if last is None:
+            raise RuntimeError("query_followup invoked before the actor has spoken")
+        last_line, last_idx = last
+        dialogue = "\n\n".join(
+            f"{m.name}: {m.text}"
+            for m in history.messages[history.summary_idx : last_idx + 1]
+            if m.name != NARRATOR_ROLE_NAME
+        )
+        dialogue_summary_wrapper = ""
+        if history.summary:
+            dialogue_summary_wrapper = get_prompt("common/dialogue_summary_wrapper").compile(
+                dialogue_summary=history.summary
+            )
+        prompt = get_prompt("query/query_followup")
+        prompt_input = {
+            "scene_description": self.scene_data.scene_description,
+            "actors": ", ".join([self.actor.name, PLAYER_ROLE_NAME]),
+            "dialogue": dialogue,
+            "dialogue_summary_wrapper": dialogue_summary_wrapper,
+            "last_line": f"{last_line.name}: {last_line.text}",
+        }
+        compiled = prompt.compile(**prompt_input)
+        return PromptInfo(prompt=compiled, input_args=prompt_input, langfuse_prompt=prompt)
 
     def _evaluate_event_checkpoints(self, name: str) -> None:
         from digital_actor.checkpoints import EventCheckpoint

@@ -10,7 +10,7 @@ from digital_actor.stage_context import set_stage
 
 from metahuman_actor.actor import MetaHumanDigitalActor
 from metahuman_actor.game_driven.scenario import GameDrivenScenario
-from metahuman_actor.game_driven.scene import GameDrivenScene
+from metahuman_actor.game_driven.scene import GameDrivenScene, FollowupHint
 from metahuman_actor.game_driven.scene_data import GameDrivenSceneData
 
 from .conftest import write_scenario_tree
@@ -138,3 +138,66 @@ async def test_trigger_prompt_includes_substituted_info(scene_and_stage):
     scene, stage = scene_and_stage
     await scene.trigger("player_drew_weapon", info={"weapon": "axe"}, world_state={})
     assert any("The player drew axe. React." in p for p in stage.prompts)
+
+
+@pytest.mark.asyncio
+async def test_respond_returns_followup_hint_when_requested(scene_and_stage, monkeypatch):
+    scene, stage = scene_and_stage
+
+    async def fake_query(prompt_info, obs_name="completion"):
+        if obs_name == "query_followup":
+            return "YES"
+        return "A canned line."
+
+    stage.llm_acomplete = fake_query  # type: ignore[assignment]
+    line, hint = await scene.respond_with_hint(
+        "Hello", world_state={}, request_followup_hint=True
+    )
+    assert hint is not None
+    assert hint.available is True
+    assert hint.line_id == line.line_id
+    assert hint.suggested_delay_seconds == scene.suggested_delay_seconds
+
+
+@pytest.mark.asyncio
+async def test_respond_no_hint_when_not_requested(scene_and_stage):
+    scene, stage = scene_and_stage
+    line, hint = await scene.respond_with_hint(
+        "Hello", world_state={}, request_followup_hint=False
+    )
+    assert hint is None
+
+
+@pytest.mark.asyncio
+async def test_followup_hint_available_false_when_query_no(scene_and_stage):
+    scene, stage = scene_and_stage
+
+    async def fake_query(prompt_info, obs_name="completion"):
+        if obs_name == "query_followup":
+            return "NO"
+        return "A canned line."
+
+    stage.llm_acomplete = fake_query  # type: ignore[assignment]
+    line, hint = await scene.respond_with_hint(
+        "Hello", world_state={}, request_followup_hint=True
+    )
+    assert hint is not None
+    assert hint.available is False
+
+
+@pytest.mark.asyncio
+async def test_followup_query_failure_returns_no_hint(scene_and_stage):
+    scene, stage = scene_and_stage
+
+    async def fake_query(prompt_info, obs_name="completion"):
+        if obs_name == "query_followup":
+            raise RuntimeError("llm down")
+        return "A canned line."
+
+    stage.llm_acomplete = fake_query  # type: ignore[assignment]
+    line, hint = await scene.respond_with_hint(
+        "Hello", world_state={}, request_followup_hint=True
+    )
+    # Query failure is silent: line still produced, no hint.
+    assert line.text == "A canned line."
+    assert hint is None
