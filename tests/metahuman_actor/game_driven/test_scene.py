@@ -201,3 +201,17 @@ async def test_followup_query_failure_returns_no_hint(scene_and_stage):
     # Query failure is silent: line still produced, no hint.
     assert line.text == "A canned line."
     assert hint is None
+
+
+@pytest.mark.asyncio
+async def test_summarization_runs_and_reads_scene_data(scene_and_stage):
+    scene, stage = scene_and_stage
+    # Force summarization to trigger quickly.
+    scene.actor.history.summarize_threshold = 2
+    # Each respond adds Player + actor (2 non-narrator messages); a few turns
+    # pushes past the threshold and triggers summarize_if_needed -> the actor's
+    # get_summary_prompt_info, which reads stage_context.scene_data fields.
+    for i in range(4):
+        await scene.respond(f"message {i}", world_state={})
+    # Summarization ran without error and populated the summary.
+    assert scene.actor.history.summary

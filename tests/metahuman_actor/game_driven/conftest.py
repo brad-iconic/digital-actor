@@ -87,7 +87,7 @@ def _seed_shared_prompts(langfuse_root):
     from pathlib import Path
 
     repo_prompts = Path(__file__).resolve().parents[3] / ".langfuse_prompts"
-    for sub in ("dialogue", "common", "query"):
+    for sub in ("dialogue", "common", "query", "summary"):
         src = repo_prompts / sub
         if src.is_dir():
             shutil.copytree(src, langfuse_root / sub, dirs_exist_ok=True)
