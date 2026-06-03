@@ -94,6 +94,7 @@ class GameDrivenScene(BaseScene):
 
     def _evaluate_event_checkpoints(self, name: str) -> None:
         from digital_actor.checkpoints import EventCheckpoint
+        from digital_actor.game_events import GameEvent
         from digital_actor.stage_context import stage_context
 
         checkpoints = self.scene_data.checkpoints
@@ -107,8 +108,6 @@ class GameDrivenScene(BaseScene):
                     )
                 checkpoints.complete(node.id)
                 for callback in node.callbacks or []:
-                    from digital_actor.game_events import GameEvent
-
                     stage_context.deliver_event(GameEvent(name=callback, info={}))
                 break
 
