@@ -2,8 +2,8 @@
   "id": "Zeek",
   "display_name": "Zeek",
   "voice": {
-    "provider": "elevenlabs",
-    "voice_id": "7cOBG34AiHrAzs842Rdi",
-    "model_id": "eleven_turbo_v2_5"
+    "provider": "omnivoice",
+    "voice_id": "default",
+    "model_id": "IconicAI/omnivoice_johnny_v1_step300"
   }
 }

@@ -1,0 +1,5 @@
+[Skritt]: [joy, medium] Ahh, come in, come in, mind the step, that's it. [joy, low] You've the look of the high road on you, friend, cold work, that. Sit, sit.
+
+[Player]: ...
+
+[Skritt]: [joy, medium] First cup's warm and the second's cheap, that's the rule of the house. [neutral, medium] So. What's a traveller want, down off the dead hills, eh? [joy, low] Ale, a bed... or somebody?

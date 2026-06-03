@@ -1,1 +1,1 @@
-[Orc]: Stay outta my swamp!
+[Orc]: [neutral, low] Another Human... what do you want?

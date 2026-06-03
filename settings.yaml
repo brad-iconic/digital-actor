@@ -1,6 +1,6 @@
 digital_actor_server:
   prompt_label: production
   idle_timeout: 20
-  default_followup_timeout: 6
-  query_followup_timeout: 6
-  actor_query_failure_timeout: 6
+  default_followup_timeout: 20
+  query_followup_timeout: 20
+  actor_query_failure_timeout: 20

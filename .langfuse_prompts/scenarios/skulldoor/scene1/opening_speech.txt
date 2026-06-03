@@ -1,0 +1,5 @@
+[Orc]: [neutral, low] Stop there. [neutral, medium] This is the only way out of these hills, and the door's mine.
+
+[Player]: ...
+
+[Orc]: [anger, low] I lift the bar for one thing. A name. [neutral, medium] Martin Conner. [anger, medium] Tell me where he is... and you walk through. Tell me nothing, and you go back the way you came.
