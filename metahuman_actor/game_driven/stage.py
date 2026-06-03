@@ -68,14 +68,6 @@ class GameDrivenStage(SingleSceneStage):
             return None
         return self._scene.scene_data
 
-    async def await_idle(self) -> None:
-        # GameDrivenScene subclasses BaseScene, which (unlike SingleActorScene)
-        # does not define await_idle. Guard so the inherited lifecycle calls in
-        # set_scene/set_interaction/unload don't crash on a scene without it.
-        scene = self._scene
-        if scene is not None and hasattr(scene, "await_idle"):
-            await scene.await_idle()
-
     async def on_game_event(self, event: GameEventBase) -> None:
         return
 

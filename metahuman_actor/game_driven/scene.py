@@ -57,6 +57,16 @@ class GameDrivenScene(BaseScene):
     def reset(self) -> None:
         self.actor.reset()
 
+    async def await_idle(self) -> None:
+        """Block until any in-flight response pipeline has finished.
+
+        Acquiring the response lock (held for the duration of respond/trigger)
+        guarantees no response is mid-flight, so lifecycle code can safely swap
+        scene_data or tear down.
+        """
+        async with self._response_lock:
+            pass
+
     # --- request entry points ---
 
     async def respond(
