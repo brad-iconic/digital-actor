@@ -69,3 +69,34 @@ def test_render_trigger_narrator_none_when_no_template(local_prompts):
     scenario = _scenario(local_prompts)
     data = GameDrivenSceneData.load(scenario, scene="scene_1", character="zeek", interaction="converse")
     assert data.triggers["greet"].render_narrator({}) is None
+
+
+def test_loads_populated_checkpoints(local_prompts):
+    import json
+
+    scenario = _scenario(local_prompts)
+    inter = scenario.interaction_dir("scene_1", "zeek", "converse")
+    # Use a realistic node shape from metahuman_actor/scenarios/zeek/scene1/checkpoints.json
+    (inter / "checkpoints.json").write_text(
+        json.dumps(
+            {
+                "nodes": [
+                    {
+                        "id": "player_introduced",
+                        "type": "Query",
+                        "target": "Player",
+                        "query_str": "The player has introduced themselves or said hello to Ava.",
+                        "narrator_message": {
+                            "true": "The player has greeted Ava. She warms up and is ready to chat.",
+                            "false": "Ava is still waiting for a friendly greeting.",
+                        },
+                        "callbacks": ["player_introduced"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    data = GameDrivenSceneData.load(scenario, scene="scene_1", character="zeek", interaction="converse")
+    assert len(data.checkpoints.nodes) == 1
+    assert data.checkpoints.is_finished() is False  # node has no dependency, so it's immediately active
