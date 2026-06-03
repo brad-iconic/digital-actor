@@ -50,6 +50,7 @@ class GameDrivenServer(WebSocketServer):
     async def _handle_message(self, msg: dict, ws) -> None:
         msg_type = msg.get("type")
         stage: GameDrivenStage = self._stage
+        logger.info("<<< %s", msg_type)
         try:
             if msg_type == "list_scenarios":
                 active = stage.scenario.name if stage.scenario else None
@@ -143,6 +144,9 @@ class GameDrivenServer(WebSocketServer):
                 world_state = msg.get("world_state") or {}
                 request_followup = bool(msg.get("request_followup_hint", False))
                 emotions = msg.get("emotions")
+                # respond_with_hint/trigger_with_hint aren't on the stage's
+                # public API (its on_user_input doesn't return the hint), so the
+                # server reaches the scene directly for the hint-bearing path.
                 _, hint = await stage._scene.respond_with_hint(
                     text,
                     world_state,
