@@ -86,6 +86,17 @@ class GameDrivenScenario:
 
     @classmethod
     def load(cls, name: str) -> GameDrivenScenario:
+        """Load a scenario's config from ``scenarios/<name>/scenario.json``.
+
+        Raises:
+            GameDrivenScenarioNotFoundError: if the scenario directory or its
+                ``scenario.json`` is missing.
+
+        A malformed ``scenario.json`` (invalid JSON, or missing a required key)
+        propagates the natural ``json.JSONDecodeError`` / ``KeyError`` — the
+        server layer surfaces it to the client as an error frame. This mirrors
+        the existing ``metahuman_actor.scenario.Scenario.load`` behaviour.
+        """
         data_root = _scenarios_root() / name
         if not data_root.is_dir():
             raise GameDrivenScenarioNotFoundError(name)
