@@ -100,3 +100,41 @@ async def test_respond_empty_text_raises(scene_and_stage):
     scene, stage = scene_and_stage
     with pytest.raises(ValueError):
         await scene.respond("   ", world_state={})
+
+
+@pytest.mark.asyncio
+async def test_trigger_generates_line(scene_and_stage):
+    scene, stage = scene_and_stage
+    line = await scene.trigger("greet", info={}, world_state={})
+    assert line.text == "A canned line."
+    assert any("The player approaches" in p for p in stage.prompts)
+
+
+@pytest.mark.asyncio
+async def test_trigger_with_narrator_adds_narrator_line(scene_and_stage):
+    scene, stage = scene_and_stage
+    await scene.trigger("player_drew_weapon", info={"weapon": "sword"}, world_state={})
+    narrator_lines = [m for m in scene.actor.history.messages if m.name == NARRATOR_ROLE_NAME]
+    assert any("The player draws their sword." == m.text for m in narrator_lines)
+
+
+@pytest.mark.asyncio
+async def test_trigger_without_narrator_adds_no_narrator_line(scene_and_stage):
+    scene, stage = scene_and_stage
+    await scene.trigger("greet", info={}, world_state={})
+    narrator_lines = [m for m in scene.actor.history.messages if m.name == NARRATOR_ROLE_NAME]
+    assert narrator_lines == []
+
+
+@pytest.mark.asyncio
+async def test_unknown_trigger_raises_keyerror(scene_and_stage):
+    scene, stage = scene_and_stage
+    with pytest.raises(KeyError):
+        await scene.trigger("does_not_exist", info={}, world_state={})
+
+
+@pytest.mark.asyncio
+async def test_trigger_prompt_includes_substituted_info(scene_and_stage):
+    scene, stage = scene_and_stage
+    await scene.trigger("player_drew_weapon", info={"weapon": "axe"}, world_state={})
+    assert any("The player drew axe. React." in p for p in stage.prompts)

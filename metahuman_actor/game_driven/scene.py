@@ -70,6 +70,48 @@ class GameDrivenScene(BaseScene):
             await self.actor.history.summarize_if_needed()
             return line
 
+    async def trigger(
+        self,
+        name: str,
+        info: dict[str, str],
+        world_state: dict | None,
+        request_followup_hint: bool = False,
+    ) -> DialogueLine:
+        config = self.scene_data.triggers[name]  # KeyError -> caller emits error frame
+        async with self._response_lock:
+            narrator = config.render_narrator(info)
+            if narrator is not None:
+                self.actor.history.add_message(NARRATOR_ROLE_NAME, narrator)
+            self._evaluate_event_checkpoints(name)
+            prompt_info = self._build_line_prompt(
+                template="dialogue/get_trigger_line",
+                world_state=world_state,
+                trigger_prompt=config.render_prompt(info),
+            )
+            line = await self._generate_and_deliver(prompt_info, emotions=None)
+            await self.actor.history.summarize_if_needed()
+            return line
+
+    def _evaluate_event_checkpoints(self, name: str) -> None:
+        from digital_actor.checkpoints import EventCheckpoint
+        from digital_actor.stage_context import stage_context
+
+        checkpoints = self.scene_data.checkpoints
+        if not checkpoints or not checkpoints.nodes:
+            return
+        for node in checkpoints.active_nodes():
+            if isinstance(node, EventCheckpoint) and node.event_id == name:
+                if node.narrator_message and "true" in node.narrator_message:
+                    self.actor.history.add_message(
+                        NARRATOR_ROLE_NAME, node.narrator_message["true"]
+                    )
+                checkpoints.complete(node.id)
+                for callback in node.callbacks or []:
+                    from digital_actor.game_events import GameEvent
+
+                    stage_context.deliver_event(GameEvent(name=callback, info={}))
+                break
+
     # --- internals ---
 
     def _build_line_prompt(
