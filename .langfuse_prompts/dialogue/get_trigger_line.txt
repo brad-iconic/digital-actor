@@ -1,0 +1,19 @@
+{{scene_back_story}}
+
+# Character
+{{character_back_story}}
+
+# Scene
+{{scene_description}}
+
+{{current_situation_wrapper}}# Recent event
+{{trigger_prompt}}
+
+# Speakers
+{{actors}}
+
+{{dialogue_summary_wrapper}}# Dialogue
+{{dialogue}}
+
+{{steer_back_instructions}}
+Given the recent event above, write {{actor_name}}'s next spoken line, in character. Output only the line.

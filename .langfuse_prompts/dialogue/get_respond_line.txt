@@ -1,0 +1,16 @@
+{{scene_back_story}}
+
+# Character
+{{character_back_story}}
+
+# Scene
+{{scene_description}}
+
+{{current_situation_wrapper}}# Speakers
+{{actors}}
+
+{{dialogue_summary_wrapper}}# Dialogue
+{{dialogue}}
+
+{{steer_back_instructions}}
+The player has just spoken to {{actor_name}}. Write {{actor_name}}'s next spoken line, in character. Output only the line.
