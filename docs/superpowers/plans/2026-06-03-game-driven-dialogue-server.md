@@ -16,7 +16,9 @@ Read the design spec first: `docs/superpowers/specs/2026-06-03-game-driven-dialo
 
 Key facts about the existing code (do not modify these — only read/reuse):
 
-- **`langfuse_utils.get_prompt(name)`** returns a prompt object; call `.compile(**kwargs)` to render it to a string. `name` is a path like `"scenarios/zeek/scene_1/scene_description"` (no `.txt`). When `--langfuse-local` is used, prompts are read from `.langfuse_prompts/<name>.txt`.
+- **`langfuse_utils.get_prompt(name)`** returns a prompt object; call `.compile(**kwargs)` to render it to a string. `name` is a slash path like `"scenarios/zeek/scene_1/scene_description"` (no extension). The loader resolves it under the local prompt root, trying `<name>.txt`, then `<name>.json`, then `<name>`. **Deeply nested names work** — e.g. `"scenarios/zeek_gd/scene_1/characters/zeek/converse/steer_back_instructions"` resolves to that `.txt` under the root. `.compile(**kwargs)` substitutes `{{var}}` / `{{{var}}}` placeholders and resolves `@@@langfusePrompt:name=<other>@@@` inline includes.
+- **ALL prompt content in the new path MUST go through `get_prompt`** — lore, trigger bodies, trigger narrators, and the top-level templates. This is the single seam that (a) flips local↔remote with no code change and (b) keeps every prompt observable/linkable in Langfuse traces. Never read a prompt body with `Path.read_text` — that would make it invisible to Langfuse forever. (The scenario *loader* still uses the filesystem to discover *structure* — which scenes/interactions/triggers exist — but it hands prompt *names* to `get_prompt`, never file contents.)
+- **Local mode + root:** local mode is active when the process opened a session via `langfuse_session(local=True)` (the server passes this when `--langfuse-local` is set). The local root comes from the `LOCAL_LANGFUSE_PATH` env var (default `.langfuse_prompts/`). **In tests**, activate it with `monkeypatch.setenv("LOCAL_LANGFUSE_PATH", str(tmp_path))` and wrap the test body in `with langfuse_session(local=True):` so `get_prompt` resolves fixtures under `tmp_path`. A reusable fixture for this is defined in Task 4 and reused by Tasks 6 and 9.
 - **`digital_actor.scene.BaseScene`** is an ABC with abstract `async on_user_input`, `async tick`, `async on_game_event(name, info)`, `async on_interrupt(line_id, elapsed_seconds)`, and `reset()`. We implement it but most methods are minimal.
 - **`digital_actor.actor.SceneDigitalActor`** owns `.history` (a `DialogueHistory`), `.name`, and provides `async generate_next_text(...)`, `async run_tts(line)`, and `async history.summarize_if_needed()`. `history.add_message(role, text)` returns a `DialogueLine` with a `.line_id`.
 - **`digital_actor.dialogue`** exposes `PLAYER_ROLE_NAME`, `NARRATOR_ROLE_NAME`, and `DialogueLine`.
@@ -42,7 +44,7 @@ New files (all created by this plan):
 
 - `metahuman_actor/game_driven/__init__.py` — package marker.
 - `metahuman_actor/game_driven/scenario.py` — `GameDrivenScenario` loader for the new on-disk layout + `list_game_driven_scenarios()`.
-- `metahuman_actor/game_driven/scene_data.py` — `GameDrivenSceneData` (lore + trigger registry + checkpoints) and `TriggerConfig`.
+- `metahuman_actor/game_driven/scene_data.py` — `GameDrivenSceneData` (lore + trigger registry + checkpoints) and `TriggerConfig`. Reads all prompt content via `get_prompt` (NOT direct disk reads); discovers the trigger registry by listing the `triggers/` folder on disk and then loads each trigger body via `get_prompt`.
 - `metahuman_actor/game_driven/world_state.py` — renders the `world_state` dict into the `## Current situation` prompt block.
 - `metahuman_actor/game_driven/scene.py` — `GameDrivenScene` implementing `BaseScene`.
 - `metahuman_actor/game_driven/stage.py` — `GameDrivenStage` (scenario lifecycle, scene/interaction switching).
@@ -63,7 +65,13 @@ New test files:
 - `tests/metahuman_actor/game_driven/test_stage.py`
 - `tests/metahuman_actor/game_driven/test_server.py`
 
-A test fixture scenario tree is created on disk under `tmp_path` by helper functions in the tests (mirroring `test_scenario.py`'s `_make_scenario_on_disk`).
+A test fixture scenario tree is created on disk under `tmp_path` by helper functions in the tests (mirroring `test_scenario.py`'s `_make_scenario_on_disk`). Because prompt content flows through `get_prompt`, the fixture tree is placed under a `LOCAL_LANGFUSE_PATH` pointed at `tmp_path` and a local langfuse session is opened for the test (see the `local_prompts` fixture in Task 4).
+
+Additional test file:
+
+- `tests/metahuman_actor/game_driven/conftest.py` — the shared `local_prompts` fixture (env + local session pointed at `tmp_path`) reused across scene-data, scene, and stage tests.
+
+**Future-Langfuse note (informational, not a task):** the scenario *loader* discovers structure (scenes, interactions, triggers) by walking the filesystem. When prompts later move to Langfuse, directory-walking won't enumerate remote prompts — the structure will need to come from an explicit manifest (e.g. fields in `scenario.json` listing scenes/interactions and each interaction listing its trigger names). v1 keeps filesystem discovery; this is flagged so the migration isn't a surprise.
 
 ---
 
@@ -227,6 +235,8 @@ scenarios/<scenario>/
 
 For v1, the loader exposes the *default* character/scene/interaction and helpers to resolve a `(scene, character, interaction)` triple to its directory.
 
+**The loader roots scenarios at `<local-prompt-root>/scenarios/`** (via `resolve_local_langfuse_root()`), NOT `settings.scenarios_path`. This keeps prompt *content* (read by `get_prompt`) and structure *discovery* (filesystem walk) under one root, and puts new scenarios in the Langfuse namespace for a clean future upload. `prompts_root` is therefore `f"scenarios/{name}"`, so Task 4's names like `"scenarios/tavern/scene_1/scene_description"` resolve to `<root>/scenarios/tavern/scene_1/scene_description.txt` — the same file `data_root` points at.
+
 **Files:**
 - Create: `metahuman_actor/game_driven/scenario.py`
 - Test: `tests/metahuman_actor/game_driven/test_scenario.py`
@@ -248,12 +258,11 @@ from metahuman_actor.game_driven.scenario import (
     GameDrivenScenarioNotFoundError,
     list_game_driven_scenarios,
 )
-from metahuman_actor.settings import settings as global_settings
 
 
-def _make_tree(root, name="tavern"):
-    """Create a minimal valid game-driven scenario tree under root/name."""
-    d = root / name
+def _make_tree(scenarios_root, name="tavern"):
+    """Create a minimal scenario tree under <scenarios_root>/<name>."""
+    d = scenarios_root / name
     (d / "personas").mkdir(parents=True)
     (d / "personas" / "zeek.json").write_text(
         json.dumps({"id": "zeek", "display_name": "Zeek"}), encoding="utf-8"
@@ -279,9 +288,17 @@ def _make_tree(root, name="tavern"):
     return d
 
 
-def test_load_success(tmp_path, monkeypatch):
-    monkeypatch.setattr(global_settings, "scenarios_path", tmp_path, raising=False)
-    _make_tree(tmp_path)
+@pytest.fixture
+def scenarios_root(tmp_path, monkeypatch):
+    """Set LOCAL_LANGFUSE_PATH=tmp_path; scenario trees live at tmp_path/scenarios/<name>."""
+    monkeypatch.setenv("LOCAL_LANGFUSE_PATH", str(tmp_path))
+    root = tmp_path / "scenarios"
+    root.mkdir()
+    return root
+
+
+def test_load_success(scenarios_root):
+    _make_tree(scenarios_root)
     s = GameDrivenScenario.load("tavern")
     assert s.name == "tavern"
     assert s.default_character == "zeek"
@@ -289,24 +306,21 @@ def test_load_success(tmp_path, monkeypatch):
     assert s.default_interaction == "converse"
 
 
-def test_persona_path_resolves(tmp_path, monkeypatch):
-    monkeypatch.setattr(global_settings, "scenarios_path", tmp_path, raising=False)
-    _make_tree(tmp_path)
+def test_persona_path_resolves(scenarios_root):
+    _make_tree(scenarios_root)
     s = GameDrivenScenario.load("tavern")
-    assert s.persona_path("zeek") == tmp_path / "tavern" / "personas" / "zeek.json"
+    assert s.persona_path("zeek") == scenarios_root / "tavern" / "personas" / "zeek.json"
 
 
-def test_interaction_dir_resolves(tmp_path, monkeypatch):
-    monkeypatch.setattr(global_settings, "scenarios_path", tmp_path, raising=False)
-    _make_tree(tmp_path)
+def test_interaction_dir_resolves(scenarios_root):
+    _make_tree(scenarios_root)
     s = GameDrivenScenario.load("tavern")
-    expected = tmp_path / "tavern" / "scene_1" / "characters" / "zeek" / "converse"
+    expected = scenarios_root / "tavern" / "scene_1" / "characters" / "zeek" / "converse"
     assert s.interaction_dir("scene_1", "zeek", "converse") == expected
 
 
-def test_has_scene_and_has_interaction(tmp_path, monkeypatch):
-    monkeypatch.setattr(global_settings, "scenarios_path", tmp_path, raising=False)
-    _make_tree(tmp_path)
+def test_has_scene_and_has_interaction(scenarios_root):
+    _make_tree(scenarios_root)
     s = GameDrivenScenario.load("tavern")
     assert s.has_scene("scene_1") is True
     assert s.has_scene("scene_99") is False
@@ -314,25 +328,22 @@ def test_has_scene_and_has_interaction(tmp_path, monkeypatch):
     assert s.has_interaction("scene_1", "zeek", "barter") is False
 
 
-def test_load_missing_directory_raises(tmp_path, monkeypatch):
-    monkeypatch.setattr(global_settings, "scenarios_path", tmp_path, raising=False)
+def test_load_missing_directory_raises(scenarios_root):
     with pytest.raises(GameDrivenScenarioNotFoundError):
         GameDrivenScenario.load("nope")
 
 
-def test_prompts_root_uses_name(tmp_path, monkeypatch):
-    monkeypatch.setattr(global_settings, "scenarios_path", tmp_path, raising=False)
-    _make_tree(tmp_path)
+def test_prompts_root_uses_scenarios_prefix(scenarios_root):
+    _make_tree(scenarios_root)
     s = GameDrivenScenario.load("tavern")
     assert s.prompts_root == "scenarios/tavern"
 
 
-def test_list_returns_scenarios_with_scenario_json(tmp_path, monkeypatch):
-    monkeypatch.setattr(global_settings, "scenarios_path", tmp_path, raising=False)
-    _make_tree(tmp_path, "alpha")
-    _make_tree(tmp_path, "bravo")
-    (tmp_path / "legacy").mkdir()  # no scenario.json -> excluded
-    (tmp_path / ".hidden").mkdir()
+def test_list_returns_scenarios_with_scenario_json(scenarios_root):
+    _make_tree(scenarios_root, "alpha")
+    _make_tree(scenarios_root, "bravo")
+    (scenarios_root / "legacy").mkdir()  # no scenario.json -> excluded
+    (scenarios_root / ".hidden").mkdir()
     assert list_game_driven_scenarios() == ["alpha", "bravo"]
 ```
 
@@ -373,14 +384,25 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from metahuman_actor.settings import settings
+from langfuse_utils import resolve_local_langfuse_root
+
+
+def _scenarios_root() -> Path:
+    """Directory containing game-driven scenario trees.
+
+    New-layout scenarios live under the local prompt root at ``scenarios/`` so
+    their prompt content is reachable by get_prompt names like
+    ``scenarios/<name>/...`` AND their structure is discoverable on disk by the
+    loader. Default local root is ``.langfuse_prompts/`` (or LOCAL_LANGFUSE_PATH).
+    """
+    return resolve_local_langfuse_root() / "scenarios"
 
 
 class GameDrivenScenarioNotFoundError(FileNotFoundError):
     def __init__(self, name: str) -> None:
         self.name = name
         super().__init__(
-            f"Game-driven scenario {name!r} not found under {settings.scenarios_path}"
+            f"Game-driven scenario {name!r} not found under {_scenarios_root()}"
         )
 
 
@@ -393,10 +415,14 @@ class GameDrivenScenario:
 
     @property
     def data_root(self) -> Path:
-        return settings.scenarios_path / self.name
+        return _scenarios_root() / self.name
 
     @property
     def prompts_root(self) -> str:
+        # Prompt names are resolved by get_prompt under the local prompt root.
+        # Scenario trees live at <root>/scenarios/<name>, so names are
+        # "scenarios/<name>/<scene>/...". Keeps content + structure in one place
+        # and in the Langfuse namespace for a clean future upload.
         return f"scenarios/{self.name}"
 
     def persona_path(self, character: str) -> Path:
@@ -419,7 +445,7 @@ class GameDrivenScenario:
 
     @classmethod
     def load(cls, name: str) -> GameDrivenScenario:
-        data_root = settings.scenarios_path / name
+        data_root = _scenarios_root() / name
         if not data_root.is_dir():
             raise GameDrivenScenarioNotFoundError(name)
         config_path = data_root / "scenario.json"
@@ -437,10 +463,11 @@ class GameDrivenScenario:
 
 def list_game_driven_scenarios() -> list[str]:
     """Return sorted names of scenarios that have a scenario.json."""
-    if not settings.scenarios_path.is_dir():
+    root = _scenarios_root()
+    if not root.is_dir():
         return []
     names: list[str] = []
-    for entry in settings.scenarios_path.iterdir():
+    for entry in root.iterdir():
         if entry.name.startswith("."):
             continue
         if not entry.is_dir() or entry.is_symlink():
@@ -467,187 +494,283 @@ git commit -m "add GameDrivenScenario loader for new layout"
 
 ## Task 4: Scene-data model (lore + trigger registry)
 
-`GameDrivenSceneData` reads the actual prompt bodies for one `(scene, character, interaction)` triple and discovers the trigger registry. It exposes the fields `MetaHumanDigitalActor.get_next_line_prompt_info` reads from `stage_context.scene_data` (`scene_back_story`, `character_back_story`, `prev_scene_description`, `scene_description`, `steer_back_instruction`, `scene_supplement`), so the actor's existing prompt-building works unchanged.
+`GameDrivenSceneData` loads the prompt content for one `(scene, character, interaction)` triple **through `get_prompt`** and discovers the trigger registry by listing the `triggers/` folder. It exposes the fields `MetaHumanDigitalActor.get_next_line_prompt_info` reads from `stage_context.scene_data` (`scene_back_story`, `character_back_story`, `prev_scene_description`, `scene_description`, `steer_back_instruction`, `scene_supplement`), so the actor's existing prompt-building works unchanged.
 
-`prev_scene_description` and `scene_supplement` have no source in the new layout, so they are empty strings. `checkpoints` defaults to an empty graph when no `checkpoints.json` exists.
+Prompt **names** are built from `scenario.prompts_root` plus the relative path, e.g. `f"{prompts_root}/{scene}/characters/{character}/{interaction}/steer_back_instructions"`. `get_prompt` resolves these under the local prompt root (or Langfuse remotely). Trigger prompt/narrator substitution uses `.compile(**info)` (`{{var}}` placeholders) — consistent with every other prompt and observable in traces.
+
+**Prompt-root alignment (important):** for `get_prompt(name)` to resolve, the name must be relative to the local prompt root (`LOCAL_LANGFUSE_PATH`, default `.langfuse_prompts/`). Scenarios live at `<root>/scenarios/<name>/`, so `scenario.prompts_root` is `f"scenarios/{name}"`. In tests, the `local_prompts` fixture sets `LOCAL_LANGFUSE_PATH = tmp_path` and `write_scenario_tree` places the tree at `tmp_path/scenarios/<name>/...`, so `get_prompt("scenarios/tavern/scene_1/scene_description")` resolves to `tmp_path/scenarios/tavern/scene_1/scene_description.txt` — exactly where the loader's `data_root` points. Structure discovery (Task 3) and prompt content (Task 4) read from the same root.
+
+`prev_scene_description` and `scene_supplement` have no source in the new layout, so they are empty strings. `checkpoints` defaults to an empty graph when no `checkpoints.json` exists. (Checkpoints are structured JSON, not prompts — loaded by reading the file directly; that's fine.)
+
+A `_get_optional(name)` helper returns `""` when `get_prompt(name)` raises `FileNotFoundError`, for optional prompts like `opening_speech` and trigger `narrator`.
 
 **Files:**
+- Create: `tests/metahuman_actor/game_driven/conftest.py` (shared `local_prompts` fixture)
 - Create: `metahuman_actor/game_driven/scene_data.py`
 - Test: `tests/metahuman_actor/game_driven/test_scene_data.py`
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the shared fixture (conftest.py)**
 
-`tests/metahuman_actor/game_driven/test_scene_data.py`:
+`tests/metahuman_actor/game_driven/conftest.py`:
 
 ```python
-"""Tests for GameDrivenSceneData loading and trigger discovery."""
+"""Shared fixtures for game_driven tests.
+
+The new dialogue path reads all prompt content via langfuse_utils.get_prompt.
+In tests we activate local prompt mode pointed at a tmp_path tree so get_prompt
+resolves the fixture prompts (and scenario.json / personas are also read from
+the same tree, since the scenario data tree lives under the langfuse root).
+"""
 from __future__ import annotations
 
 import json
 
 import pytest
 
-from metahuman_actor.game_driven.scenario import GameDrivenScenario
-from metahuman_actor.game_driven.scene_data import GameDrivenSceneData
-from metahuman_actor.settings import settings as global_settings
+from langfuse_utils import langfuse_session
 
 
-def _make_tree(root, *, with_triggers=True, with_checkpoints=False, with_narrator=True):
-    name = "tavern"
-    d = root / name
-    (d / "personas").mkdir(parents=True)
-    (d / "personas" / "zeek.json").write_text(
+def write_scenario_tree(
+    langfuse_root,
+    *,
+    name="tavern",
+    scenes=("scene_1",),
+    interactions=("converse",),
+    with_triggers=True,
+):
+    """Create a game-driven scenario tree under <langfuse_root>/scenarios/<name>.
+
+    The loader resolves scenarios under the local prompt root at scenarios/, and
+    get_prompt resolves names like "scenarios/<name>/scene_1/..." to these files.
+
+    Returns the scenario directory path.
+    """
+    scen = langfuse_root / "scenarios" / name
+    (scen / "personas").mkdir(parents=True)
+    (scen / "personas" / "zeek.json").write_text(
         json.dumps({"id": "zeek", "display_name": "Zeek"}), encoding="utf-8"
     )
-    (d / "scenario.json").write_text(
+    (scen / "scenario.json").write_text(
         json.dumps(
             {
                 "default_character": "zeek",
-                "default_scene": "scene_1",
-                "default_interaction": "converse",
+                "default_scene": scenes[0],
+                "default_interaction": interactions[0],
             }
         ),
         encoding="utf-8",
     )
-    (d / "back_story.txt").write_text("The tavern arc.", encoding="utf-8")
-    inter = d / "scene_1" / "characters" / "zeek" / "converse"
-    inter.mkdir(parents=True)
-    (d / "scene_1" / "scene_description.txt").write_text("Dim tavern.", encoding="utf-8")
-    (d / "scene_1" / "characters" / "zeek" / "character_back_story.txt").write_text(
-        "Zeek is wary.", encoding="utf-8"
-    )
-    (inter / "steer_back_instructions.txt").write_text("Stay on topic.", encoding="utf-8")
-    (inter / "opening_speech.txt").write_text("[Zeek]: Well met.", encoding="utf-8")
-    if with_triggers:
-        greet = inter / "triggers" / "greet"
-        greet.mkdir(parents=True)
-        (greet / "prompt.txt").write_text("The player approaches. Greet them.", encoding="utf-8")
-        weapon = inter / "triggers" / "player_drew_weapon"
-        weapon.mkdir(parents=True)
-        (weapon / "prompt.txt").write_text("The player drew a weapon. React.", encoding="utf-8")
-        if with_narrator:
-            (weapon / "narrator.txt").write_text("The player draws their {weapon}.", encoding="utf-8")
-    if with_checkpoints:
-        (inter / "checkpoints.json").write_text(json.dumps({"nodes": []}), encoding="utf-8")
-    return d
+    (scen / "back_story.txt").write_text("The tavern arc.", encoding="utf-8")
+    for scene in scenes:
+        (scen / scene).mkdir(parents=True, exist_ok=True)
+        (scen / scene / "scene_description.txt").write_text(f"{scene} desc.", encoding="utf-8")
+        char = scen / scene / "characters" / "zeek"
+        char.mkdir(parents=True, exist_ok=True)
+        (char / "character_back_story.txt").write_text("Zeek is wary.", encoding="utf-8")
+        for interaction in interactions:
+            inter = char / interaction
+            inter.mkdir(parents=True, exist_ok=True)
+            (inter / "steer_back_instructions.txt").write_text(
+                f"{interaction} steer.", encoding="utf-8"
+            )
+            (inter / "opening_speech.txt").write_text("[Zeek]: Well met.", encoding="utf-8")
+            if with_triggers:
+                greet = inter / "triggers" / "greet"
+                greet.mkdir(parents=True)
+                (greet / "prompt.txt").write_text(
+                    "The player approaches. Greet them.", encoding="utf-8"
+                )
+                weapon = inter / "triggers" / "player_drew_weapon"
+                weapon.mkdir(parents=True)
+                (weapon / "prompt.txt").write_text(
+                    "The player drew {{weapon}}. React.", encoding="utf-8"
+                )
+                (weapon / "narrator.txt").write_text(
+                    "The player draws their {{weapon}}.", encoding="utf-8"
+                )
+    return scen
+
+
+def _seed_shared_prompts(langfuse_root):
+    """Copy the repo's dialogue/ + common/ templates into the test root.
+
+    The scene builds prompts via get_prompt("dialogue/get_respond_line") etc.,
+    which must resolve under the test's LOCAL_LANGFUSE_PATH. We copy the real
+    templates (created in Task 5 and already present in .langfuse_prompts/) so
+    tests exercise the real templates, not stubs.
+    """
+    import shutil
+    from pathlib import Path
+
+    repo_prompts = Path(__file__).resolve().parents[3] / ".langfuse_prompts"
+    for sub in ("dialogue", "common", "query"):
+        src = repo_prompts / sub
+        if src.is_dir():
+            shutil.copytree(src, langfuse_root / sub, dirs_exist_ok=True)
 
 
 @pytest.fixture
-def scenario(tmp_path, monkeypatch):
-    monkeypatch.setattr(global_settings, "scenarios_path", tmp_path, raising=False)
-    _make_tree(tmp_path)
+def local_prompts(tmp_path, monkeypatch):
+    """Activate local langfuse mode pointed at tmp_path.
+
+    Seeds the shared dialogue/common/query templates into tmp_path so the
+    scene's get_prompt calls resolve. Yields tmp_path (the local prompt root).
+    Tests create their scenario tree under <tmp_path>/scenarios/<name> via
+    write_scenario_tree; the loader finds it under <root>/scenarios/.
+    """
+    monkeypatch.setenv("LOCAL_LANGFUSE_PATH", str(tmp_path))
+    _seed_shared_prompts(tmp_path)
+    with langfuse_session(local=True):
+        yield tmp_path
+```
+
+The `from metahuman_actor.settings import settings as global_settings` import in conftest is no longer needed (the loader uses the langfuse root, not `scenarios_path`). Drop it from the conftest imports.
+
+Note: `Path(__file__).resolve().parents[3]` resolves the repo root from `tests/metahuman_actor/game_driven/conftest.py` (3 levels up: `game_driven` → `metahuman_actor` → `tests` → repo root). Verify this depth matches the actual tree when implementing; adjust the index if the test path differs.
+
+Note on prompt-root alignment: `GameDrivenScenario` (Task 3) roots scenarios at `<local-prompt-root>/scenarios/<name>` and its `prompts_root` is `f"scenarios/{name}"`. The `local_prompts` fixture sets `LOCAL_LANGFUSE_PATH = tmp_path` and writes the tree at `tmp_path/scenarios/<name>/...`. So a prompt name `"scenarios/<name>/scene_1/scene_description"` resolves to the same file the loader's `data_root` points at. Content + structure share one root.
+
+- [ ] **Step 2: Write the failing test**
+
+`tests/metahuman_actor/game_driven/test_scene_data.py`:
+
+```python
+"""Tests for GameDrivenSceneData loading (via get_prompt) and trigger discovery."""
+from __future__ import annotations
+
+import pytest
+
+from metahuman_actor.game_driven.scenario import GameDrivenScenario
+from metahuman_actor.game_driven.scene_data import GameDrivenSceneData
+
+from .conftest import write_scenario_tree
+
+
+def _scenario(langfuse_root, **kwargs):
+    write_scenario_tree(langfuse_root, **kwargs)
     return GameDrivenScenario.load("tavern")
 
 
-def test_loads_lore_fields(scenario, monkeypatch):
-    # get_prompt with local langfuse reads from .langfuse_prompts; here we point
-    # it at the on-disk tree by reading files directly in load(). See impl note.
+def test_loads_lore_fields(local_prompts):
+    scenario = _scenario(local_prompts)
     data = GameDrivenSceneData.load(scenario, scene="scene_1", character="zeek", interaction="converse")
     assert data.scene_back_story == "The tavern arc."
     assert data.character_back_story == "Zeek is wary."
-    assert data.scene_description == "Dim tavern."
-    assert data.steer_back_instruction == "Stay on topic."
+    assert data.scene_description == "scene_1 desc."
+    assert data.steer_back_instruction == "converse steer."
     assert data.opening_speech == "[Zeek]: Well met."
-    # Fields with no source in the new layout are empty.
     assert data.prev_scene_description == ""
     assert data.scene_supplement == ""
 
 
-def test_discovers_triggers(scenario):
+def test_discovers_triggers(local_prompts):
+    scenario = _scenario(local_prompts)
     data = GameDrivenSceneData.load(scenario, scene="scene_1", character="zeek", interaction="converse")
     assert set(data.triggers.keys()) == {"greet", "player_drew_weapon"}
-    assert data.triggers["greet"].prompt == "The player approaches. Greet them."
-    assert data.triggers["greet"].narrator_template is None
-    assert data.triggers["player_drew_weapon"].narrator_template == "The player draws their {weapon}."
 
 
-def test_no_triggers_folder_yields_empty_registry(tmp_path, monkeypatch):
-    monkeypatch.setattr(global_settings, "scenarios_path", tmp_path, raising=False)
-    _make_tree(tmp_path, with_triggers=False)
-    scenario = GameDrivenScenario.load("tavern")
+def test_no_triggers_folder_yields_empty_registry(local_prompts):
+    scenario = _scenario(local_prompts, with_triggers=False)
     data = GameDrivenSceneData.load(scenario, scene="scene_1", character="zeek", interaction="converse")
     assert data.triggers == {}
 
 
-def test_optional_opening_speech_absent(tmp_path, monkeypatch):
-    monkeypatch.setattr(global_settings, "scenarios_path", tmp_path, raising=False)
-    d = _make_tree(tmp_path)
-    (d / "scene_1" / "characters" / "zeek" / "converse" / "opening_speech.txt").unlink()
-    scenario = GameDrivenScenario.load("tavern")
+def test_optional_opening_speech_absent(local_prompts):
+    scenario = _scenario(local_prompts)
+    # Remove the opening_speech prompt file.
+    (scenario.interaction_dir("scene_1", "zeek", "converse") / "opening_speech.txt").unlink()
     data = GameDrivenSceneData.load(scenario, scene="scene_1", character="zeek", interaction="converse")
     assert data.opening_speech == ""
 
 
-def test_checkpoints_default_empty_when_absent(scenario):
+def test_checkpoints_default_empty_when_absent(local_prompts):
+    scenario = _scenario(local_prompts)
     data = GameDrivenSceneData.load(scenario, scene="scene_1", character="zeek", interaction="converse")
-    assert data.checkpoints.is_finished() is True  # empty graph is trivially finished
+    assert data.checkpoints.is_finished() is True
 
 
-def test_render_trigger_narrator_substitutes_info(scenario):
+def test_render_trigger_prompt_substitutes_info(local_prompts):
+    scenario = _scenario(local_prompts)
+    data = GameDrivenSceneData.load(scenario, scene="scene_1", character="zeek", interaction="converse")
+    rendered = data.triggers["player_drew_weapon"].render_prompt({"weapon": "sword"})
+    assert rendered == "The player drew sword. React."
+
+
+def test_render_trigger_narrator_substitutes_info(local_prompts):
+    scenario = _scenario(local_prompts)
     data = GameDrivenSceneData.load(scenario, scene="scene_1", character="zeek", interaction="converse")
     rendered = data.triggers["player_drew_weapon"].render_narrator({"weapon": "sword"})
     assert rendered == "The player draws their sword."
 
 
-def test_render_trigger_narrator_none_when_no_template(scenario):
+def test_render_trigger_narrator_none_when_no_template(local_prompts):
+    scenario = _scenario(local_prompts)
     data = GameDrivenSceneData.load(scenario, scene="scene_1", character="zeek", interaction="converse")
     assert data.triggers["greet"].render_narrator({}) is None
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 3: Run test to verify it fails**
 
 Run: `uv run pytest tests/metahuman_actor/game_driven/test_scene_data.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'metahuman_actor.game_driven.scene_data'`.
 
-- [ ] **Step 3: Write minimal implementation**
-
-Implementation note: the existing code renders prompts via `langfuse_utils.get_prompt`, but that reads from the *flat* `.langfuse_prompts/` namespace. The new layout's prompt bodies live in the scenario data tree (under `settings.scenarios_path`), so `GameDrivenSceneData` reads the `.txt` files **directly from disk** via the scenario's path helpers. This keeps the new layout self-contained and testable with `tmp_path` (no langfuse dependency in tests). The trigger `prompt`/`narrator` use Python `str.format(**info)` for substitution — simple and dependency-free; a missing `{key}` raises `KeyError` which the scene surfaces as an error frame.
+- [ ] **Step 4: Write minimal implementation**
 
 `metahuman_actor/game_driven/scene_data.py`:
 
 ```python
 """Scene-bound content for one (scene, character, interaction) triple.
 
-Reads prompt bodies directly from the scenario data tree (under
-settings.scenarios_path) so the layout is self-contained and unit-testable
-without Langfuse. Exposes the attribute names that
-MetaHumanDigitalActor.get_next_line_prompt_info reads from
+All prompt content is loaded via langfuse_utils.get_prompt so it flips
+local<->Langfuse with no code change and stays observable in traces. Trigger
+*structure* is discovered by listing the triggers/ folder on disk; each
+trigger's body is then loaded by name through get_prompt. Exposes the
+attribute names MetaHumanDigitalActor.get_next_line_prompt_info reads from
 stage_context.scene_data, so the actor's prompt building works unchanged.
 """
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from digital_actor.checkpoints import SceneCheckpoints
+from langfuse_utils import get_prompt
 
 from metahuman_actor.game_driven.scenario import GameDrivenScenario
 
 
-def _read_optional(path: Path) -> str:
-    if path.is_file():
-        return path.read_text(encoding="utf-8")
-    return ""
+def _get(name: str) -> str:
+    """Compile a required prompt to a string."""
+    return get_prompt(name).compile()
+
+
+def _get_optional(name: str) -> str:
+    """Compile an optional prompt; return '' if it doesn't exist."""
+    try:
+        return get_prompt(name).compile()
+    except FileNotFoundError:
+        return ""
 
 
 @dataclass(frozen=True)
 class TriggerConfig:
-    """One discovered trigger: its prompt body and optional narrator template."""
+    """One discovered trigger: its prompt name and optional narrator name.
+
+    Rendering goes through get_prompt(...).compile(**info) so {{var}}
+    placeholders in the trigger files are substituted from the event info.
+    """
 
     name: str
-    prompt: str
-    narrator_template: str | None = None
+    prompt_name: str
+    narrator_name: str | None = None
 
     def render_prompt(self, info: dict[str, str]) -> str:
-        """Render the trigger prompt with ``info`` substituted via str.format."""
-        return self.prompt.format(**info)
+        return get_prompt(self.prompt_name).compile(**info)
 
     def render_narrator(self, info: dict[str, str]) -> str | None:
-        """Render the narrator line, or ``None`` if this trigger has no template."""
-        if self.narrator_template is None:
+        if self.narrator_name is None:
             return None
-        return self.narrator_template.format(**info)
+        return get_prompt(self.narrator_name).compile(**info)
 
 
 @dataclass(frozen=True)
@@ -680,11 +803,13 @@ class GameDrivenSceneData:
         character: str,
         interaction: str,
     ) -> GameDrivenSceneData:
-        inter_dir = scenario.interaction_dir(scene, character, interaction)
-        char_dir = scenario.character_dir(scene, character)
-        scene_dir = scenario.scene_dir(scene)
+        root = scenario.prompts_root  # "scenarios/<name>"
+        inter_prefix = f"{root}/{scene}/characters/{character}/{interaction}"
 
-        checkpoints_path = inter_dir / "checkpoints.json"
+        # checkpoints.json is structured data, not a prompt — read directly.
+        checkpoints_path = (
+            scenario.interaction_dir(scene, character, interaction) / "checkpoints.json"
+        )
         if checkpoints_path.is_file():
             with open(checkpoints_path, encoding="utf-8") as f:
                 checkpoints = SceneCheckpoints.from_dict(json.load(f))
@@ -695,50 +820,48 @@ class GameDrivenSceneData:
             scene=scene,
             character=character,
             interaction=interaction,
-            scene_back_story=_read_optional(scenario.data_root / "back_story.txt"),
-            character_back_story=_read_optional(char_dir / "character_back_story.txt"),
-            scene_description=_read_optional(scene_dir / "scene_description.txt"),
-            steer_back_instruction=_read_optional(inter_dir / "steer_back_instructions.txt"),
-            opening_speech=_read_optional(inter_dir / "opening_speech.txt"),
-            triggers=cls._discover_triggers(inter_dir / "triggers"),
+            scene_back_story=_get(f"{root}/back_story"),
+            character_back_story=_get(f"{root}/{scene}/characters/{character}/character_back_story"),
+            scene_description=_get(f"{root}/{scene}/scene_description"),
+            steer_back_instruction=_get(f"{inter_prefix}/steer_back_instructions"),
+            opening_speech=_get_optional(f"{inter_prefix}/opening_speech"),
+            triggers=cls._discover_triggers(scenario, scene, character, interaction),
             checkpoints=checkpoints,
         )
 
     @staticmethod
-    def _discover_triggers(triggers_root: Path) -> dict[str, TriggerConfig]:
+    def _discover_triggers(
+        scenario: GameDrivenScenario, scene: str, character: str, interaction: str
+    ) -> dict[str, TriggerConfig]:
+        triggers_root = (
+            scenario.interaction_dir(scene, character, interaction) / "triggers"
+        )
         registry: dict[str, TriggerConfig] = {}
         if not triggers_root.is_dir():
             return registry
+        prefix = f"{scenario.prompts_root}/{scene}/characters/{character}/{interaction}/triggers"
         for entry in sorted(triggers_root.iterdir()):
-            if not entry.is_dir():
+            if not entry.is_dir() or not (entry / "prompt.txt").is_file():
                 continue
-            prompt_path = entry / "prompt.txt"
-            if not prompt_path.is_file():
-                continue
-            narrator_path = entry / "narrator.txt"
-            narrator = (
-                narrator_path.read_text(encoding="utf-8")
-                if narrator_path.is_file()
-                else None
-            )
+            has_narrator = (entry / "narrator.txt").is_file()
             registry[entry.name] = TriggerConfig(
                 name=entry.name,
-                prompt=prompt_path.read_text(encoding="utf-8"),
-                narrator_template=narrator,
+                prompt_name=f"{prefix}/{entry.name}/prompt",
+                narrator_name=f"{prefix}/{entry.name}/narrator" if has_narrator else None,
             )
         return registry
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 5: Run test to verify it passes**
 
 Run: `uv run pytest tests/metahuman_actor/game_driven/test_scene_data.py -v`
-Expected: PASS (7 passed).
+Expected: PASS (8 passed).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add metahuman_actor/game_driven/scene_data.py tests/metahuman_actor/game_driven/test_scene_data.py
-git commit -m "add GameDrivenSceneData with trigger discovery"
+git add tests/metahuman_actor/game_driven/conftest.py metahuman_actor/game_driven/scene_data.py tests/metahuman_actor/game_driven/test_scene_data.py
+git commit -m "add GameDrivenSceneData (prompt content via get_prompt) + shared fixture"
 ```
 
 ---
@@ -800,13 +923,21 @@ The player has just spoken to {{actor_name}}. Write {{actor_name}}'s next spoken
 Given the recent event above, write {{actor_name}}'s next spoken line, in character. Output only the line.
 ```
 
-- [ ] **Step 3: Verify the files render with the local prompt loader**
+- [ ] **Step 3: Verify the templates resolve through get_prompt in local mode**
 
 Run:
 ```bash
-uv run python -c "import os; os.environ['LANGFUSE_LOCAL']='1'; from pathlib import Path; print(Path('.langfuse_prompts/dialogue/get_respond_line.txt').read_text()[:40])"
+uv run python -c "
+import os; os.environ['LOCAL_LANGFUSE_PATH']='.langfuse_prompts'
+from langfuse_utils import langfuse_session, get_prompt
+with langfuse_session(local=True):
+    print(get_prompt('dialogue/get_respond_line').compile(
+        scene_back_story='', character_back_story='', scene_description='',
+        steer_back_instructions='', current_situation_wrapper='',
+        dialogue_summary_wrapper='', actors='Zeek, Player', actor_name='Zeek', dialogue='')[:60])
+"
 ```
-Expected: prints the first 40 characters of the template (`{{scene_back_story}}` ...). This just confirms the file exists and is readable; full render is exercised in Task 6.
+Expected: prints the rendered template head (placeholders substituted, no `{{...}}` left for the provided keys). Confirms the template is resolvable and compiles via the real seam. Full behavior is exercised in Task 6.
 
 - [ ] **Step 4: Commit**
 
@@ -837,8 +968,6 @@ A test seam: the scene must work with a fake LLM. We construct the scene with a 
 """Unit tests for GameDrivenScene using a stub stage."""
 from __future__ import annotations
 
-import json
-
 import pytest
 
 from digital_actor.data_models import PromptInfo
@@ -850,7 +979,8 @@ from metahuman_actor.actor import MetaHumanDigitalActor
 from metahuman_actor.game_driven.scenario import GameDrivenScenario
 from metahuman_actor.game_driven.scene import GameDrivenScene
 from metahuman_actor.game_driven.scene_data import GameDrivenSceneData
-from metahuman_actor.settings import settings as global_settings
+
+from .conftest import write_scenario_tree
 
 
 class StubStage:
@@ -895,36 +1025,17 @@ class StubStage:
         pass
 
 
-def _make_tree(root):
-    name = "tavern"
-    d = root / name
-    (d / "personas").mkdir(parents=True)
-    (d / "personas" / "zeek.json").write_text(
-        json.dumps({"id": "zeek", "display_name": "Zeek"}), encoding="utf-8"
-    )
-    (d / "scenario.json").write_text(
-        json.dumps({"default_character": "zeek", "default_scene": "scene_1", "default_interaction": "converse"}),
-        encoding="utf-8",
-    )
-    (d / "back_story.txt").write_text("Arc.", encoding="utf-8")
-    inter = d / "scene_1" / "characters" / "zeek" / "converse"
-    inter.mkdir(parents=True)
-    (d / "scene_1" / "scene_description.txt").write_text("Tavern.", encoding="utf-8")
-    (d / "scene_1" / "characters" / "zeek" / "character_back_story.txt").write_text("Wary.", encoding="utf-8")
-    (inter / "steer_back_instructions.txt").write_text("Stay.", encoding="utf-8")
-    return d
-
-
 @pytest.fixture
-def scene_and_stage(tmp_path, monkeypatch):
-    monkeypatch.setattr(global_settings, "scenarios_path", tmp_path, raising=False)
-    _make_tree(tmp_path)
+def scene_and_stage(local_prompts):
+    # local_prompts (from conftest.py) activates local langfuse mode pointed at
+    # tmp_path and seeds the dialogue/common/query templates. Build the scenario
+    # tree there, then load scene_data through get_prompt.
+    write_scenario_tree(local_prompts)
     scenario = GameDrivenScenario.load("tavern")
     scene_data = GameDrivenSceneData.load(
         scenario, scene="scene_1", character="zeek", interaction="converse"
     )
-    persona = {"id": "zeek", "display_name": "Zeek"}
-    actor = MetaHumanDigitalActor(persona)
+    actor = MetaHumanDigitalActor({"id": "zeek", "display_name": "Zeek"})
     stage = StubStage()
     stage.set_scene_data(scene_data)
     set_stage(stage)
@@ -1119,65 +1230,43 @@ Add `trigger(name, info, world_state, ...)`. Look up the trigger in `scene_data.
 
 - [ ] **Step 1: Write the failing tests (append to test_scene.py)**
 
-Append to `tests/metahuman_actor/game_driven/test_scene.py`. First, extend `_make_tree` to add triggers — replace the `_make_tree` body's final lines (before `return d`) with the trigger creation, OR add a second fixture. To keep it simple, add a dedicated fixture:
+Append to `tests/metahuman_actor/game_driven/test_scene.py`. The `scene_and_stage` fixture already builds a scenario via `write_scenario_tree`, which includes a `greet` trigger (no narrator) and a `player_drew_weapon` trigger (with a `{{weapon}}` narrator) — so the trigger tests reuse `scene_and_stage` directly, no new fixture needed.
 
 ```python
-@pytest.fixture
-def scene_with_triggers(tmp_path, monkeypatch):
-    monkeypatch.setattr(global_settings, "scenarios_path", tmp_path, raising=False)
-    d = _make_tree(tmp_path)
-    inter = d / "scene_1" / "characters" / "zeek" / "converse"
-    greet = inter / "triggers" / "greet"
-    greet.mkdir(parents=True)
-    (greet / "prompt.txt").write_text("The player approaches. Greet them.", encoding="utf-8")
-    weapon = inter / "triggers" / "player_drew_weapon"
-    weapon.mkdir(parents=True)
-    (weapon / "prompt.txt").write_text("The player drew {weapon}. React.", encoding="utf-8")
-    (weapon / "narrator.txt").write_text("The player draws their {weapon}.", encoding="utf-8")
-    scenario = GameDrivenScenario.load("tavern")
-    scene_data = GameDrivenSceneData.load(scenario, scene="scene_1", character="zeek", interaction="converse")
-    actor = MetaHumanDigitalActor({"id": "zeek", "display_name": "Zeek"})
-    stage = StubStage()
-    stage.set_scene_data(scene_data)
-    set_stage(stage)
-    scene = GameDrivenScene(actor=actor, scene_data=scene_data)
-    return scene, stage
-
-
 @pytest.mark.asyncio
-async def test_trigger_generates_line(scene_with_triggers):
-    scene, stage = scene_with_triggers
+async def test_trigger_generates_line(scene_and_stage):
+    scene, stage = scene_and_stage
     line = await scene.trigger("greet", info={}, world_state={})
     assert line.text == "A canned line."
     assert any("The player approaches" in p for p in stage.prompts)
 
 
 @pytest.mark.asyncio
-async def test_trigger_with_narrator_adds_narrator_line(scene_with_triggers):
-    scene, stage = scene_with_triggers
+async def test_trigger_with_narrator_adds_narrator_line(scene_and_stage):
+    scene, stage = scene_and_stage
     await scene.trigger("player_drew_weapon", info={"weapon": "sword"}, world_state={})
     narrator_lines = [m for m in scene.actor.history.messages if m.name == NARRATOR_ROLE_NAME]
     assert any("The player draws their sword." == m.text for m in narrator_lines)
 
 
 @pytest.mark.asyncio
-async def test_trigger_without_narrator_adds_no_narrator_line(scene_with_triggers):
-    scene, stage = scene_with_triggers
+async def test_trigger_without_narrator_adds_no_narrator_line(scene_and_stage):
+    scene, stage = scene_and_stage
     await scene.trigger("greet", info={}, world_state={})
     narrator_lines = [m for m in scene.actor.history.messages if m.name == NARRATOR_ROLE_NAME]
     assert narrator_lines == []
 
 
 @pytest.mark.asyncio
-async def test_unknown_trigger_raises_keyerror(scene_with_triggers):
-    scene, stage = scene_with_triggers
+async def test_unknown_trigger_raises_keyerror(scene_and_stage):
+    scene, stage = scene_and_stage
     with pytest.raises(KeyError):
         await scene.trigger("does_not_exist", info={}, world_state={})
 
 
 @pytest.mark.asyncio
-async def test_trigger_prompt_includes_substituted_info(scene_with_triggers):
-    scene, stage = scene_with_triggers
+async def test_trigger_prompt_includes_substituted_info(scene_and_stage):
+    scene, stage = scene_and_stage
     await scene.trigger("player_drew_weapon", info={"weapon": "axe"}, world_state={})
     assert any("The player drew axe. React." in p for p in stage.prompts)
 ```
@@ -1484,43 +1573,22 @@ The stage holds the `GameDrivenScene`. On load it constructs actor + scene_data 
 """Tests for GameDrivenStage lifecycle and switching (TTS disabled)."""
 from __future__ import annotations
 
-import json
-
 import pytest
 
 from metahuman_actor.game_driven.stage import GameDrivenStage
-from metahuman_actor.settings import settings as global_settings
 
-
-def _make_tree(root):
-    name = "tavern"
-    d = root / name
-    (d / "personas").mkdir(parents=True)
-    (d / "personas" / "zeek.json").write_text(
-        json.dumps({"id": "zeek", "display_name": "Zeek"}), encoding="utf-8"
-    )
-    (d / "scenario.json").write_text(
-        json.dumps({"default_character": "zeek", "default_scene": "scene_1", "default_interaction": "converse"}),
-        encoding="utf-8",
-    )
-    (d / "back_story.txt").write_text("Arc.", encoding="utf-8")
-    for scene in ("scene_1", "scene_2"):
-        (d / scene / "scene_description.txt").parent.mkdir(parents=True, exist_ok=True)
-        (d / scene / "scene_description.txt").write_text(f"{scene} desc.", encoding="utf-8")
-        char = d / scene / "characters" / "zeek"
-        (char).mkdir(parents=True, exist_ok=True)
-        (char / "character_back_story.txt").write_text("Wary.", encoding="utf-8")
-        for interaction in ("converse", "barter"):
-            inter = char / interaction
-            inter.mkdir(parents=True, exist_ok=True)
-            (inter / "steer_back_instructions.txt").write_text(f"{interaction} steer.", encoding="utf-8")
-    return d
+from .conftest import write_scenario_tree
 
 
 @pytest.fixture
-def stage(tmp_path, monkeypatch):
-    monkeypatch.setattr(global_settings, "scenarios_path", tmp_path, raising=False)
-    _make_tree(tmp_path)
+def stage(local_prompts):
+    # Two scenes, two interactions, so set_scene / set_interaction have targets.
+    # scene_description renders as "<scene> desc." and steer as "<interaction> steer."
+    write_scenario_tree(
+        local_prompts,
+        scenes=("scene_1", "scene_2"),
+        interactions=("converse", "barter"),
+    )
     return GameDrivenStage(llm_model="cerebras/qwen-3-235b-a22b-instruct-2507", tts_enabled=False)
 
 
@@ -1815,27 +1883,9 @@ import pytest
 
 from metahuman_actor.game_driven.scene import FollowupHint
 from metahuman_actor.game_driven.server import GameDrivenServer
-from metahuman_actor.settings import settings as global_settings
+from metahuman_actor.game_driven.stage import GameDrivenStage
 
-
-def _make_tree(root):
-    name = "tavern"
-    d = root / name
-    (d / "personas").mkdir(parents=True)
-    (d / "personas" / "zeek.json").write_text(
-        json.dumps({"id": "zeek", "display_name": "Zeek"}), encoding="utf-8"
-    )
-    (d / "scenario.json").write_text(
-        json.dumps({"default_character": "zeek", "default_scene": "scene_1", "default_interaction": "converse"}),
-        encoding="utf-8",
-    )
-    (d / "back_story.txt").write_text("Arc.", encoding="utf-8")
-    char = d / "scene_1" / "characters" / "zeek"
-    (char / "converse").mkdir(parents=True)
-    (d / "scene_1" / "scene_description.txt").write_text("Tavern.", encoding="utf-8")
-    (char / "character_back_story.txt").write_text("Wary.", encoding="utf-8")
-    (char / "converse" / "steer_back_instructions.txt").write_text("Stay.", encoding="utf-8")
-    return d
+from .conftest import write_scenario_tree
 
 
 class FakeWS:
@@ -1847,11 +1897,8 @@ class FakeWS:
 
 
 @pytest.fixture
-def server(tmp_path, monkeypatch):
-    monkeypatch.setattr(global_settings, "scenarios_path", tmp_path, raising=False)
-    _make_tree(tmp_path)
-    from metahuman_actor.game_driven.stage import GameDrivenStage
-
+def server(local_prompts):
+    write_scenario_tree(local_prompts)
     stage = GameDrivenStage(
         llm_model="cerebras/qwen-3-235b-a22b-instruct-2507", tts_enabled=False
     )
@@ -2149,44 +2196,48 @@ git commit -m "add GameDrivenServer WS protocol and entry point"
 
 Create a real game-driven scenario on disk by converting an existing one (e.g. `zeek`) into the new tree, so the server can be launched and smoke-tested manually. This is a content task — no Python.
 
+The new-layout scenarios live under the local prompt root at `scenarios/` — i.e. **`.langfuse_prompts/scenarios/<name>/`** by default (same root the existing scenario prompt files already use). The loader (`resolve_local_langfuse_root() / "scenarios"`) and `get_prompt` both resolve there.
+
 **Files:**
-- Create: `.langfuse_prompts/scenarios/zeek_gd/scenario.json` (and the tree below)
-- Create: `metahuman_actor/scenarios/zeek_gd/...` is NOT used — the new layout lives entirely under `settings.scenarios_path`. Confirm `settings.scenarios_path` (read `metahuman_actor/settings.py`) and place the tree there. If `scenarios_path` points at `metahuman_actor/scenarios`, create the tree there; if it points at `.langfuse_prompts/scenarios`, create it there. Use whichever `settings.scenarios_path` resolves to.
+- Create: the tree below under `.langfuse_prompts/scenarios/zeek_gd/`.
 
-- [ ] **Step 1: Determine the scenarios path**
+- [ ] **Step 1: Create the new-layout scenario tree under `.langfuse_prompts/scenarios/zeek_gd/`**
 
-Run: `uv run python -c "from metahuman_actor.settings import settings; print(settings.scenarios_path)"`
-Expected: prints an absolute path. Call it `<SCEN>`.
-
-- [ ] **Step 2: Create the new-layout scenario tree under `<SCEN>/zeek_gd/`**
-
-Create these files (copy lore text from the existing `zeek` scenario's prompt files where sensible; minimal placeholder text is acceptable for a smoke test):
+Create these files (copy lore text from the existing `zeek` scenario's prompt files under `.langfuse_prompts/scenarios/zeek/` where sensible; minimal placeholder text is acceptable for a smoke test):
 
 ```
-<SCEN>/zeek_gd/scenario.json
+.langfuse_prompts/scenarios/zeek_gd/scenario.json
   {"default_character": "zeek", "default_scene": "scene_1", "default_interaction": "converse"}
 
-<SCEN>/zeek_gd/back_story.txt                    (copy from existing zeek back_story)
-<SCEN>/zeek_gd/personas/zeek.json                (copy existing zeek persona.json; keep voice config)
-<SCEN>/zeek_gd/scene_1/scene_description.txt     (copy existing scene1 scene_description)
-<SCEN>/zeek_gd/scene_1/characters/zeek/character_back_story.txt  (copy existing)
-<SCEN>/zeek_gd/scene_1/characters/zeek/converse/steer_back_instructions.txt  (copy existing)
-<SCEN>/zeek_gd/scene_1/characters/zeek/converse/opening_speech.txt           (copy existing)
-<SCEN>/zeek_gd/scene_1/characters/zeek/converse/triggers/greet/prompt.txt
+.langfuse_prompts/scenarios/zeek_gd/back_story.txt                    (copy from .langfuse_prompts/scenarios/zeek/back_story.txt)
+.langfuse_prompts/scenarios/zeek_gd/personas/zeek.json                (copy metahuman_actor/scenarios/zeek/persona.json; keep voice config)
+.langfuse_prompts/scenarios/zeek_gd/scene_1/scene_description.txt     (copy from zeek/scene1/scene_description.txt)
+.langfuse_prompts/scenarios/zeek_gd/scene_1/characters/zeek/character_back_story.txt  (copy from zeek/scene1/character_back_story.txt)
+.langfuse_prompts/scenarios/zeek_gd/scene_1/characters/zeek/converse/steer_back_instructions.txt  (copy from zeek/scene1/steer_back_instructions.txt)
+.langfuse_prompts/scenarios/zeek_gd/scene_1/characters/zeek/converse/opening_speech.txt           (copy from zeek/scene1/opening_speech.txt)
+.langfuse_prompts/scenarios/zeek_gd/scene_1/characters/zeek/converse/triggers/greet/prompt.txt
   The player has approached you. Greet them in character.
-<SCEN>/zeek_gd/scene_1/characters/zeek/converse/triggers/goodbye/prompt.txt
+.langfuse_prompts/scenarios/zeek_gd/scene_1/characters/zeek/converse/triggers/goodbye/prompt.txt
   The player is leaving. Give a fitting parting line in character.
 ```
 
-- [ ] **Step 3: Verify the loader reads it**
+- [ ] **Step 2: Verify the loader reads it (local mode)**
 
 Run:
 ```bash
-uv run python -c "from metahuman_actor.game_driven.scenario import GameDrivenScenario; from metahuman_actor.game_driven.scene_data import GameDrivenSceneData; s=GameDrivenScenario.load('zeek_gd'); d=GameDrivenSceneData.load(s, scene=s.default_scene, character=s.default_character, interaction=s.default_interaction); print(s.name, list(d.triggers))"
+uv run python -c "
+from langfuse_utils import langfuse_session
+from metahuman_actor.game_driven.scenario import GameDrivenScenario
+from metahuman_actor.game_driven.scene_data import GameDrivenSceneData
+with langfuse_session(local=True):
+    s = GameDrivenScenario.load('zeek_gd')
+    d = GameDrivenSceneData.load(s, scene=s.default_scene, character=s.default_character, interaction=s.default_interaction)
+    print(s.name, list(d.triggers))
+"
 ```
 Expected: prints `zeek_gd ['goodbye', 'greet']` (sorted).
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
 git add -A
