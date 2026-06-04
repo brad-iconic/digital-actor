@@ -137,3 +137,20 @@ def test_default_character_defaults_to_first_when_absent(scenarios_root):
     s = GameDrivenScenario.load("tavern")
     assert s.characters == ["dorn", "barkeep"]
     assert s.default_character == "dorn"  # defaults to characters[0]
+
+
+def test_empty_characters_list_normalized_to_default(scenarios_root):
+    import json
+    _make_tree(scenarios_root)
+    (scenarios_root / "tavern" / "scenario.json").write_text(
+        json.dumps({
+            "characters": [],
+            "default_character": "zeek",
+            "default_scene": "scene_1",
+            "default_interaction": "converse",
+        }),
+        encoding="utf-8",
+    )
+    s = GameDrivenScenario.load("tavern")
+    # An explicitly empty list is falsy, so it normalizes to [default_character].
+    assert s.characters == ["zeek"]
