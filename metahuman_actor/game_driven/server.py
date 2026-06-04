@@ -81,9 +81,7 @@ class GameDrivenServer(WebSocketServer):
                             "type": "scenario_loaded",
                             "name": name,
                             "scene": stage.current_scene,
-                            "interactions": {
-                                stage.actor.actor_id: stage.current_interaction
-                            },
+                            "interactions": stage.interactions_map(),
                         }
                     )
                 )
@@ -109,9 +107,7 @@ class GameDrivenServer(WebSocketServer):
                         {
                             "type": "scene_changed",
                             "scene": stage.current_scene,
-                            "interactions": {
-                                stage.actor.actor_id: stage.current_interaction
-                            },
+                            "interactions": stage.interactions_map(),
                         }
                     )
                 )
@@ -121,20 +117,20 @@ class GameDrivenServer(WebSocketServer):
                 npc = (msg.get("npc") or "").strip()
                 interaction = (msg.get("interaction") or "").strip()
                 await stage.set_interaction(npc, interaction)
+                resolved = stage._resolve_npc(npc)
                 await ws.send(
                     json.dumps(
                         {
                             "type": "interaction_changed",
-                            "npc": npc,
-                            "interaction": stage.current_interaction,
+                            "npc": resolved,
+                            "interaction": stage.interactions_map()[resolved],
                         }
                     )
                 )
                 return
 
             if msg_type == "respond":
-                npc = (msg.get("npc") or "").strip()
-                self._validate_npc(npc)
+                npc = msg.get("npc")
                 text = (msg.get("text") or "").strip()
                 if not text:
                     await ws.send(
@@ -144,34 +140,24 @@ class GameDrivenServer(WebSocketServer):
                 world_state = msg.get("world_state") or {}
                 request_followup = bool(msg.get("request_followup_hint", False))
                 emotions = msg.get("emotions")
-                # respond_with_hint/trigger_with_hint aren't on the stage's
-                # public API (its on_user_input doesn't return the hint), so the
-                # server reaches the scene directly for the hint-bearing path.
-                _, hint = await stage._scene.respond_with_hint(
-                    text,
-                    world_state,
-                    emotions=emotions,
+                resolved, hint = await stage.respond(
+                    npc, text, world_state, emotions=emotions,
                     request_followup_hint=request_followup,
                 )
-                await self._maybe_send_hint(ws, npc, hint)
+                await self._maybe_send_hint(ws, resolved, hint)
                 return
 
             if msg_type == "trigger":
-                npc = (msg.get("npc") or "").strip()
-                self._validate_npc(npc)
+                npc = msg.get("npc")
                 name = (msg.get("name") or "").strip()
-                info = {
-                    str(k): str(v) for k, v in (msg.get("info") or {}).items()
-                }
+                info = {str(k): str(v) for k, v in (msg.get("info") or {}).items()}
                 world_state = msg.get("world_state") or {}
                 request_followup = bool(msg.get("request_followup_hint", False))
-                _, hint = await stage._scene.trigger_with_hint(
-                    name,
-                    info,
-                    world_state,
+                resolved, hint = await stage.trigger(
+                    npc, name, info, world_state,
                     request_followup_hint=request_followup,
                 )
-                await self._maybe_send_hint(ws, npc, hint)
+                await self._maybe_send_hint(ws, resolved, hint)
                 return
 
             await ws.send(
@@ -185,13 +171,6 @@ class GameDrivenServer(WebSocketServer):
         except Exception as exc:
             logger.exception("error handling %s", msg_type)
             await ws.send(json.dumps({"type": "error", "message": str(exc)}))
-
-    def _validate_npc(self, npc: str) -> None:
-        # Unreal stores npc ids as FName, which auto-capitalizes and is
-        # case-insensitive, so the client may send "Zeek" for "zeek".
-        stage: GameDrivenStage = self._stage
-        if stage.actor is None or npc.casefold() != stage.actor.actor_id.casefold():
-            raise ValueError(f"unknown npc {npc!r}")
 
     async def _maybe_send_hint(self, ws, npc: str, hint) -> None:
         if hint is None:
