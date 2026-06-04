@@ -1,5 +1,5 @@
 {
-  "id": "Tog",
+  "id": "tog",
   "display_name": "Tog",
   "voice": {
     "provider": "elevenlabs",
