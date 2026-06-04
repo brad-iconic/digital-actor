@@ -165,3 +165,63 @@ async def test_load_scenario_empty_name_returns_error(monkeypatch, tmp_path):
             for m in ws.sent
         )
         assert server._stage.scenario is None
+
+
+# ---------------------------------------------------------------------------
+# Task 1: respond -> on_user_input
+# ---------------------------------------------------------------------------
+
+
+async def test_respond_translates_to_on_user_input(monkeypatch, tmp_path):
+    from unittest.mock import AsyncMock
+
+    from langfuse_utils import fetch_all_prompts_from_project, langfuse_session
+
+    with langfuse_session(local=True):
+        fetch_all_prompts_from_project()
+        server = _make_empty_server(monkeypatch, tmp_path)
+        await server._stage.load_scenario("alt")
+        server._stage.on_user_input = AsyncMock()
+        ws = _FakeWS([{"type": "respond", "text": "hello there"}])
+        await server._handle_inbound(ws)
+        server._stage.on_user_input.assert_awaited_once_with("hello there")
+        assert not any(m.get("type") == "error" for m in ws.sent)
+
+
+async def test_respond_with_whitespace_is_rejected(monkeypatch, tmp_path):
+    from unittest.mock import AsyncMock
+
+    from langfuse_utils import fetch_all_prompts_from_project, langfuse_session
+
+    with langfuse_session(local=True):
+        fetch_all_prompts_from_project()
+        server = _make_empty_server(monkeypatch, tmp_path)
+        await server._stage.load_scenario("alt")
+        server._stage.on_user_input = AsyncMock()
+        ws = _FakeWS([{"type": "respond", "text": "   "}])
+        await server._handle_inbound(ws)
+        server._stage.on_user_input.assert_not_awaited()
+        assert any(
+            m.get("type") == "error" and "empty text" in m.get("message", "")
+            for m in ws.sent
+        )
+
+
+async def test_respond_rejected_when_no_scenario(monkeypatch, tmp_path):
+    from unittest.mock import AsyncMock
+
+    from langfuse_utils import fetch_all_prompts_from_project, langfuse_session
+
+    with langfuse_session(local=True):
+        fetch_all_prompts_from_project()
+        server = _make_empty_server(monkeypatch, tmp_path)
+        server._stage.on_user_input = AsyncMock()
+        ws = _FakeWS([{"type": "respond", "text": "hello"}])
+        await server._handle_inbound(ws)
+        server._stage.on_user_input.assert_not_awaited()
+        assert any(
+            m.get("type") == "error"
+            and "no scenario loaded" in m.get("message", "")
+            for m in ws.sent
+        )
+        assert server._stage.scenario is None

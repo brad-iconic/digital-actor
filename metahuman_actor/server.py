@@ -147,6 +147,22 @@ class MetaHumanServer(WebSocketServer):
                 if msg_type == "start_game":
                     logger.info("<<< start_game")
                     await self._stage.deliver_opening_speech()
+                elif msg_type == "respond":
+                    # The new game-driven client sends `respond` (with extra
+                    # npc/world_state/request_followup_hint/emotions fields the
+                    # old authoritative server has no concept of) where this
+                    # server expects a user line. Translate to on_user_input and
+                    # ignore the unsupported fields.
+                    text = (msg.get("text") or "").strip()
+                    if not text:
+                        await ws.send(
+                            json.dumps(
+                                {"type": "error", "message": "respond: empty text"}
+                            )
+                        )
+                        continue
+                    logger.info("<<< respond: %s", text[:80])
+                    await self._stage.on_user_input(text)
                 elif msg_type == "say":
                     text = (msg.get("text") or "").strip()
                     if not text:
