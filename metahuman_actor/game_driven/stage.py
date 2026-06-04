@@ -225,4 +225,40 @@ class GameDrivenStage(SingleSceneStage):
         self._characters[cid].current_interaction = interaction
         logger.info("Interaction[%s] -> %s", cid, interaction)
 
-    # --- routing (next task adds respond/trigger here) ---
+    # --- routing ---
+
+    async def respond(
+        self,
+        npc: str | None,
+        text: str,
+        world_state: dict | None,
+        emotions: list[str] | None = None,
+        request_followup_hint: bool = False,
+    ) -> tuple[str, "FollowupHint | None"]:
+        cid = self._resolve_npc(npc)
+        self._active_character = cid
+        _, hint = await self._characters[cid].scene.respond_with_hint(
+            text,
+            world_state,
+            emotions=emotions,
+            request_followup_hint=request_followup_hint,
+        )
+        return cid, hint
+
+    async def trigger(
+        self,
+        npc: str | None,
+        name: str,
+        info: dict[str, str],
+        world_state: dict | None,
+        request_followup_hint: bool = False,
+    ) -> tuple[str, "FollowupHint | None"]:
+        cid = self._resolve_npc(npc)
+        self._active_character = cid
+        _, hint = await self._characters[cid].scene.trigger_with_hint(
+            name,
+            info,
+            world_state,
+            request_followup_hint=request_followup_hint,
+        )
+        return cid, hint

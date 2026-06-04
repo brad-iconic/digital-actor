@@ -164,3 +164,93 @@ async def test_set_scene_unknown_raises_and_keeps_state(stage):
     with pytest.raises(Exception):
         await stage.set_scene("scene_99")
     assert stage.current_scene == "scene_1"
+
+
+@pytest.mark.asyncio
+async def test_respond_routes_to_named_character(multi_stage):
+    from unittest.mock import AsyncMock
+    from digital_actor.dialogue import DialogueLine
+    await multi_stage.load_scenario("tavern")
+
+    multi_stage._characters["dorn"].scene.respond_with_hint = AsyncMock(
+        return_value=(DialogueLine(name="Dorn", text="Arr.", line_id="D1"), None)
+    )
+    multi_stage._characters["barkeep"].scene.respond_with_hint = AsyncMock(
+        return_value=(DialogueLine(name="Barkeep", text="Aye.", line_id="B1"), None)
+    )
+
+    resolved, hint = await multi_stage.respond("dorn", "hi", world_state={})
+    assert resolved == "dorn"
+    multi_stage._characters["dorn"].scene.respond_with_hint.assert_awaited_once()
+    multi_stage._characters["barkeep"].scene.respond_with_hint.assert_not_awaited()
+    assert multi_stage.active_character == "dorn"
+
+
+@pytest.mark.asyncio
+async def test_respond_casefold_resolves(multi_stage):
+    from unittest.mock import AsyncMock
+    from digital_actor.dialogue import DialogueLine
+    await multi_stage.load_scenario("tavern")
+    multi_stage._characters["dorn"].scene.respond_with_hint = AsyncMock(
+        return_value=(DialogueLine(name="Dorn", text="Arr.", line_id="D1"), None)
+    )
+    resolved, _ = await multi_stage.respond("Dorn", "hi", world_state={})  # capitalized FName
+    assert resolved == "dorn"
+    multi_stage._characters["dorn"].scene.respond_with_hint.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_respond_unknown_npc_raises(multi_stage):
+    from metahuman_actor.game_driven.stage import UnknownNpcError
+    await multi_stage.load_scenario("tavern")
+    with pytest.raises(UnknownNpcError):
+        await multi_stage.respond("nobody", "hi", world_state={})
+
+
+@pytest.mark.asyncio
+async def test_respond_omitted_npc_uses_primary(multi_stage):
+    from unittest.mock import AsyncMock
+    from digital_actor.dialogue import DialogueLine
+    await multi_stage.load_scenario("tavern")
+    multi_stage._characters["dorn"].scene.respond_with_hint = AsyncMock(
+        return_value=(DialogueLine(name="Dorn", text="Arr.", line_id="D1"), None)
+    )
+    resolved, _ = await multi_stage.respond(None, "hi", world_state={})
+    assert resolved == "dorn"  # primary = default_character = first = dorn
+
+
+@pytest.mark.asyncio
+async def test_trigger_routes_to_named_character(multi_stage):
+    from unittest.mock import AsyncMock
+    from digital_actor.dialogue import DialogueLine
+    await multi_stage.load_scenario("tavern")
+    multi_stage._characters["barkeep"].scene.trigger_with_hint = AsyncMock(
+        return_value=(DialogueLine(name="Barkeep", text="Aye.", line_id="B1"), None)
+    )
+    resolved, hint = await multi_stage.trigger("barkeep", "greet", info={}, world_state={})
+    assert resolved == "barkeep"
+    multi_stage._characters["barkeep"].scene.trigger_with_hint.assert_awaited_once()
+    assert multi_stage.active_character == "barkeep"
+
+
+@pytest.mark.asyncio
+async def test_respond_history_isolated_per_character(multi_stage):
+    from digital_actor.dialogue import DialogueLine
+    await multi_stage.load_scenario("tavern")
+
+    def make_recorder(cid):
+        async def _rwh(text, world_state, emotions=None, request_followup_hint=False):
+            multi_stage._characters[cid].actor.history.add_message("Player", text)
+            return DialogueLine(name=cid, text="ok", line_id=cid), None
+        return _rwh
+
+    multi_stage._characters["dorn"].scene.respond_with_hint = make_recorder("dorn")
+    multi_stage._characters["barkeep"].scene.respond_with_hint = make_recorder("barkeep")
+
+    await multi_stage.respond("dorn", "to dorn", world_state={})
+    await multi_stage.respond("barkeep", "to barkeep", world_state={})
+
+    dorn_texts = [m.text for m in multi_stage._characters["dorn"].actor.history.messages]
+    barkeep_texts = [m.text for m in multi_stage._characters["barkeep"].actor.history.messages]
+    assert "to dorn" in dorn_texts and "to barkeep" not in dorn_texts
+    assert "to barkeep" in barkeep_texts and "to dorn" not in barkeep_texts
