@@ -2,8 +2,8 @@
   "id": "dorn",
   "display_name": "Dorn",
   "voice": {
-    "provider": "omnivoice",
-    "voice_id": "default",
-    "model_id": "IconicAI/omnivoice_johnny_v1_step300"
+    "provider": "elevenlabs",
+    "voice_id": "goT3UYdM9bhm0n2lmKQx",
+    "model_id": "eleven_turbo_v2_5"
   }
 }

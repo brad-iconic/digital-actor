@@ -2,8 +2,8 @@
   "id": "tog",
   "display_name": "Tog",
   "voice": {
-    "provider": "omnivoice",
-    "voice_id": "default",
-    "model_id": "IconicAI/omnivoice_johnny_v1_step300"
+    "provider": "elevenlabs",
+    "voice_id": "qNkzaJoHLLdpvgh5tISm",
+    "model_id": "eleven_turbo_v2_5"
   }
 }
