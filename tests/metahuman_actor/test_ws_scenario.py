@@ -296,3 +296,31 @@ async def test_unload_scenario_on_empty_server_acks_no_error(monkeypatch, tmp_pa
         assert any(m.get("type") == "scenario_unloaded" for m in ws.sent)
         assert not any(m.get("type") == "error" for m in ws.sent)
         assert server._stage.scenario is None
+
+
+# ---------------------------------------------------------------------------
+# Task 4: set_scene / set_interaction are silently ignored (regression pin)
+# ---------------------------------------------------------------------------
+
+
+async def test_set_scene_and_set_interaction_are_ignored(monkeypatch, tmp_path):
+    from unittest.mock import AsyncMock
+
+    from langfuse_utils import fetch_all_prompts_from_project, langfuse_session
+
+    with langfuse_session(local=True):
+        fetch_all_prompts_from_project()
+        server = _make_empty_server(monkeypatch, tmp_path)
+        await server._stage.load_scenario("alt")
+        server._stage.deliver_opening_speech = AsyncMock()
+        ws = _FakeWS(
+            [
+                {"type": "set_scene", "scene": "scene_2"},
+                {"type": "set_interaction", "npc": "zeek", "interaction": "barter"},
+            ]
+        )
+        # Must not raise; these fall through to _dispatch which logs an unknown
+        # message type and sends nothing.
+        await server._handle_inbound(ws)
+        assert not any(m.get("type") == "scene_changed" for m in ws.sent)
+        assert not any(m.get("type") == "interaction_changed" for m in ws.sent)
