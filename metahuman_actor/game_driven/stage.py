@@ -234,7 +234,7 @@ class GameDrivenStage(SingleSceneStage):
         world_state: dict | None,
         emotions: list[str] | None = None,
         request_followup_hint: bool = False,
-    ) -> tuple[str, "FollowupHint | None"]:
+    ) -> tuple[str, FollowupHint | None]:
         cid = self._resolve_npc(npc)
         self._active_character = cid
         _, hint = await self._characters[cid].scene.respond_with_hint(
@@ -252,7 +252,7 @@ class GameDrivenStage(SingleSceneStage):
         info: dict[str, str],
         world_state: dict | None,
         request_followup_hint: bool = False,
-    ) -> tuple[str, "FollowupHint | None"]:
+    ) -> tuple[str, FollowupHint | None]:
         cid = self._resolve_npc(npc)
         self._active_character = cid
         _, hint = await self._characters[cid].scene.trigger_with_hint(
