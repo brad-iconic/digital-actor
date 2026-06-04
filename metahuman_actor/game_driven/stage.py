@@ -1,13 +1,16 @@
 """GameDrivenStage — owns scenario lifecycle for the request-driven server.
 
-Builds the actor + scene atomically on load, swaps scene_data on
-set_scene/set_interaction while preserving actor history, and exposes the
-scene_data property that stage_context (and thus the actor's prompt builder)
-reads.
+Holds one LoadedCharacter per scenario character (each with its own actor,
+history, scene, tts client, and current interaction) plus an active-character
+pointer. stage_context.scene_data / .tts_client return the ACTIVE character's
+values; each request sets the active pointer to the addressed character before
+generating. Safe because the WS loop is sequential and each scene serializes its
+own generation — only one character generates at a time.
 """
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 
 from app_logging import get_logger
 from digital_actor.game_events import GameEventBase
@@ -17,7 +20,7 @@ from tts_lib import get_tts_client
 
 from metahuman_actor.actor import MetaHumanDigitalActor
 from metahuman_actor.game_driven.scenario import GameDrivenScenario
-from metahuman_actor.game_driven.scene import GameDrivenScene
+from metahuman_actor.game_driven.scene import FollowupHint, GameDrivenScene
 from metahuman_actor.game_driven.scene_data import GameDrivenSceneData
 
 logger = get_logger(__name__)
@@ -35,9 +38,17 @@ class UnknownNpcError(ValueError):
     pass
 
 
-class GameDrivenStage(SingleSceneStage):
-    _scene: GameDrivenScene | None
+@dataclass
+class LoadedCharacter:
+    """Per-character runtime state held by the stage."""
 
+    actor: MetaHumanDigitalActor
+    scene: GameDrivenScene
+    tts_client: object | None
+    current_interaction: str
+
+
+class GameDrivenStage(SingleSceneStage):
     def __init__(
         self,
         llm_model: str,
@@ -52,9 +63,10 @@ class GameDrivenStage(SingleSceneStage):
             messenger=messenger,
         )
         self._scenario: GameDrivenScenario | None = None
-        self.actor: MetaHumanDigitalActor | None = None
+        self._characters: dict[str, LoadedCharacter] = {}
+        self._active_character: str | None = None
+        self._primary: str | None = None
         self.current_scene: str | None = None
-        self.current_interaction: str | None = None
         self._tts_enabled = tts_enabled
         logger.info("GameDrivenStage ready (no scenario loaded)")
 
@@ -63,41 +75,71 @@ class GameDrivenStage(SingleSceneStage):
         return self._scenario
 
     @property
+    def active_character(self) -> str | None:
+        return self._active_character
+
+    def character_ids(self) -> list[str]:
+        return list(self._characters)
+
+    def interactions_map(self) -> dict[str, str]:
+        return {cid: lc.current_interaction for cid, lc in self._characters.items()}
+
+    def scene_data_for(self, cid: str) -> GameDrivenSceneData | None:
+        lc = self._characters.get(cid)
+        return lc.scene.scene_data if lc is not None else None
+
+    @property
     def scene_data(self) -> GameDrivenSceneData | None:
-        if self._scene is None:
+        if self._active_character is None:
             return None
-        return self._scene.scene_data
+        lc = self._characters.get(self._active_character)
+        return lc.scene.scene_data if lc is not None else None
+
+    @property
+    def tts_client(self) -> object | None:
+        if self._active_character is None:
+            return None
+        lc = self._characters.get(self._active_character)
+        return lc.tts_client if lc is not None else None
 
     async def on_game_event(self, event: GameEventBase) -> None:
         return
 
     async def on_user_input(self, message: str) -> None:
-        if self._scene is not None:
-            await self._scene.on_user_input(message)
+        cid = self._active_character or self._primary
+        if cid is not None:
+            await self._characters[cid].scene.on_user_input(message)
 
-    def _build_scene_data(self, scene: str, interaction: str) -> GameDrivenSceneData:
-        assert self._scenario is not None and self.actor is not None
-        return GameDrivenSceneData.load(
-            self._scenario,
-            scene=scene,
-            character=self._scenario.default_character,
-            interaction=interaction,
-        )
+    async def await_idle(self) -> None:
+        for lc in self._characters.values():
+            await lc.scene.await_idle()
 
-    async def load_scenario(self, name: str) -> None:
-        new_scenario = GameDrivenScenario.load(name)
-        persona_path = new_scenario.persona_path(new_scenario.default_character)
+    def reset(self) -> None:
+        for lc in self._characters.values():
+            lc.scene.reset()
+
+    def _resolve_npc(self, npc: str | None) -> str:
+        if not npc:
+            if self._primary is None:
+                raise UnknownNpcError("no scenario loaded")
+            return self._primary
+        for cid in self._characters:
+            if cid.casefold() == npc.casefold():
+                return cid
+        raise UnknownNpcError(npc)
+
+    def _build_character(
+        self, scenario: GameDrivenScenario, cid: str, scene: str, interaction: str
+    ) -> LoadedCharacter:
+        persona_path = scenario.persona_path(cid)
         with open(persona_path, encoding="utf-8") as f:
             persona = json.load(f)
         voice = (persona.get("voice") or {}) if self._tts_enabled else {}
-        new_actor = MetaHumanDigitalActor(persona)
-        new_scene_data = GameDrivenSceneData.load(
-            new_scenario,
-            scene=new_scenario.default_scene,
-            character=new_scenario.default_character,
-            interaction=new_scenario.default_interaction,
+        actor = MetaHumanDigitalActor(persona)
+        scene_data = GameDrivenSceneData.load(
+            scenario, scene=scene, character=cid, interaction=interaction
         )
-        new_tts = (
+        tts = (
             get_tts_client(
                 voice.get("provider"),
                 voice_id=voice.get("voice_id"),
@@ -106,30 +148,47 @@ class GameDrivenStage(SingleSceneStage):
             if voice.get("provider")
             else None
         )
-        new_scene = GameDrivenScene(actor=new_actor, scene_data=new_scene_data)
+        return LoadedCharacter(
+            actor=actor,
+            scene=GameDrivenScene(actor=actor, scene_data=scene_data),
+            tts_client=tts,
+            current_interaction=interaction,
+        )
+
+    async def load_scenario(self, name: str) -> None:
+        new_scenario = GameDrivenScenario.load(name)
+        scene = new_scenario.default_scene
+        interaction = new_scenario.default_interaction
+        new_characters: dict[str, LoadedCharacter] = {}
+        for cid in new_scenario.characters:
+            new_characters[cid] = self._build_character(
+                new_scenario, cid, scene, interaction
+            )
 
         if self._scenario is not None:
             await self.await_idle()
         self.reset()
         self._scenario = new_scenario
-        self.actor = new_actor
-        self.current_scene = new_scenario.default_scene
-        self.current_interaction = new_scenario.default_interaction
-        self._tts_client = new_tts
-        self.register_scene(new_scene)
-        logger.info("Loaded game-driven scenario=%s", new_scenario.name)
+        self._characters = new_characters
+        self._primary = new_scenario.default_character
+        self._active_character = new_scenario.default_character
+        self.current_scene = scene
+        logger.info(
+            "Loaded game-driven scenario=%s characters=%s",
+            new_scenario.name,
+            list(new_characters),
+        )
 
     async def unload_scenario(self) -> None:
         if self._scenario is None:
             return
         await self.await_idle()
         self.reset()
-        self._scene = None
+        self._characters = {}
+        self._active_character = None
+        self._primary = None
         self._scenario = None
-        self.actor = None
         self.current_scene = None
-        self.current_interaction = None
-        self._tts_client = None
         logger.info("Unloaded game-driven scenario")
 
     async def set_scene(self, scene: str) -> None:
@@ -138,32 +197,32 @@ class GameDrivenStage(SingleSceneStage):
         if not self._scenario.has_scene(scene):
             raise UnknownSceneError(scene)
         interaction = self._scenario.default_interaction
-        if not self._scenario.has_interaction(
-            scene, self._scenario.default_character, interaction
-        ):
-            raise UnknownInteractionError(f"{scene}/{interaction}")
-        new_scene_data = self._build_scene_data(scene, interaction)
+        new_data: dict[str, GameDrivenSceneData] = {}
+        for cid in self._characters:
+            if not self._scenario.has_interaction(scene, cid, interaction):
+                raise UnknownInteractionError(f"{scene}/{cid}/{interaction}")
+            new_data[cid] = GameDrivenSceneData.load(
+                self._scenario, scene=scene, character=cid, interaction=interaction
+            )
         await self.await_idle()
+        for cid, lc in self._characters.items():
+            lc.scene.scene_data = new_data[cid]
+            lc.current_interaction = interaction
         self.current_scene = scene
-        self.current_interaction = interaction
-        assert self._scene is not None
-        self._scene.scene_data = new_scene_data
-        logger.info("Scene -> %s (interaction reset to %s)", scene, interaction)
+        logger.info("Scene -> %s (all interactions reset to %s)", scene, interaction)
 
     async def set_interaction(self, npc: str, interaction: str) -> None:
-        if self._scenario is None or self.actor is None:
+        if self._scenario is None:
             raise UnknownNpcError("no scenario loaded")
-        # Unreal stores npc ids as FName, which auto-capitalizes and is
-        # case-insensitive, so the client may send "Zeek" for "zeek".
-        if npc.casefold() != self._scenario.default_character.casefold():
-            raise UnknownNpcError(npc)
-        if not self._scenario.has_interaction(
-            self.current_scene, npc, interaction
-        ):
+        cid = self._resolve_npc(npc)
+        if not self._scenario.has_interaction(self.current_scene, cid, interaction):
             raise UnknownInteractionError(interaction)
-        new_scene_data = self._build_scene_data(self.current_scene, interaction)
-        await self.await_idle()
-        self.current_interaction = interaction
-        assert self._scene is not None
-        self._scene.scene_data = new_scene_data
-        logger.info("Interaction -> %s", interaction)
+        new_scene_data = GameDrivenSceneData.load(
+            self._scenario, scene=self.current_scene, character=cid, interaction=interaction
+        )
+        await self._characters[cid].scene.await_idle()
+        self._characters[cid].scene.scene_data = new_scene_data
+        self._characters[cid].current_interaction = interaction
+        logger.info("Interaction[%s] -> %s", cid, interaction)
+
+    # --- routing (next task adds respond/trigger here) ---
