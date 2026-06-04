@@ -187,8 +187,10 @@ class GameDrivenServer(WebSocketServer):
             await ws.send(json.dumps({"type": "error", "message": str(exc)}))
 
     def _validate_npc(self, npc: str) -> None:
+        # Unreal stores npc ids as FName, which auto-capitalizes and is
+        # case-insensitive, so the client may send "Zeek" for "zeek".
         stage: GameDrivenStage = self._stage
-        if stage.actor is None or npc != stage.actor.actor_id:
+        if stage.actor is None or npc.casefold() != stage.actor.actor_id.casefold():
             raise ValueError(f"unknown npc {npc!r}")
 
     async def _maybe_send_hint(self, ws, npc: str, hint) -> None:

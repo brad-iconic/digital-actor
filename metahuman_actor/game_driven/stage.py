@@ -153,7 +153,9 @@ class GameDrivenStage(SingleSceneStage):
     async def set_interaction(self, npc: str, interaction: str) -> None:
         if self._scenario is None or self.actor is None:
             raise UnknownNpcError("no scenario loaded")
-        if npc != self._scenario.default_character:
+        # Unreal stores npc ids as FName, which auto-capitalizes and is
+        # case-insensitive, so the client may send "Zeek" for "zeek".
+        if npc.casefold() != self._scenario.default_character.casefold():
             raise UnknownNpcError(npc)
         if not self._scenario.has_interaction(
             self.current_scene, npc, interaction

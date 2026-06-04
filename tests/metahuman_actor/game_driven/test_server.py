@@ -106,6 +106,25 @@ async def test_respond_unknown_npc_errors(server):
 
 
 @pytest.mark.asyncio
+async def test_respond_npc_is_case_insensitive(server, monkeypatch):
+    # Unreal stores npc ids as FName, which auto-capitalizes and is
+    # case-insensitive, so the client may send "Zeek" for canonical "zeek".
+    ws = FakeWS()
+    await server._handle_message({"type": "load_scenario", "name": "tavern"}, ws)
+
+    async def fake_respond_with_hint(text, world_state, emotions=None, request_followup_hint=False):
+        from digital_actor.dialogue import DialogueLine
+
+        return DialogueLine(name="Zeek", text="Hi.", line_id="L1"), None
+
+    server._stage._scene.respond_with_hint = fake_respond_with_hint  # type: ignore
+    await server._handle_message(
+        {"type": "respond", "npc": "Zeek", "text": "hi", "world_state": {}}, ws
+    )
+    assert ws.sent[-1]["type"] != "error"
+
+
+@pytest.mark.asyncio
 async def test_set_scene_emits_scene_changed(server):
     ws = FakeWS()
     await server._handle_message({"type": "load_scenario", "name": "tavern"}, ws)
