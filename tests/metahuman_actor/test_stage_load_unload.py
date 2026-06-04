@@ -175,3 +175,31 @@ async def test_load_missing_after_loaded_keeps_prior(monkeypatch, tmp_path):
         with pytest.raises(ScenarioNotFoundError):
             await stage.load_scenario("nonexistent")
         assert stage.scenario.name == before
+
+
+async def test_opening_speech_sets_speak_end_elapsed(monkeypatch, tmp_path):
+    """Regression: the opening-speech path must set speak_end_elapsed so the
+    idle/followup tick can start WITHOUT a client audio_finished signal.
+
+    The game-driven client no longer sends audio_finished, so on_audio_finished
+    never fires for the opening line. If deliver_opening_speech doesn't anchor
+    speak_end_elapsed on the server-side estimate, tick()'s idle condition
+    (speak_end_elapsed is not None) is never satisfied and the actor goes silent
+    forever after the opening line.
+    """
+    from langfuse_utils import fetch_all_prompts_from_project, langfuse_session
+    from metahuman_actor.stage import MetaHumanStage
+
+    tmp_data = _setup_data_scenarios(tmp_path)
+    monkeypatch.setattr(global_settings, "scenarios_path", tmp_data, raising=False)
+
+    with langfuse_session(local=True):
+        fetch_all_prompts_from_project()
+        stage = MetaHumanStage(LLM, tts_enabled=False)
+        await stage.load_scenario("default")
+        # Precondition: nobody has spoken yet, so the clock is unset.
+        assert stage.actor.speak_end_elapsed is None
+        await stage.deliver_opening_speech()
+        # After the opening line, the idle clock anchor must be set (not None)
+        # even though no audio_finished was ever sent.
+        assert stage.actor.speak_end_elapsed is not None
