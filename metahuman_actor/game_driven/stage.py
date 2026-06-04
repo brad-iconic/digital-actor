@@ -16,7 +16,7 @@ from app_logging import get_logger
 from digital_actor.game_events import GameEventBase
 from digital_actor.messenger import Messenger, MessengerType
 from digital_actor.stage import SingleSceneStage
-from tts_lib import get_tts_client
+from tts_lib import TTSClient, get_tts_client
 
 from metahuman_actor.actor import MetaHumanDigitalActor
 from metahuman_actor.game_driven.scenario import GameDrivenScenario
@@ -44,7 +44,7 @@ class LoadedCharacter:
 
     actor: MetaHumanDigitalActor
     scene: GameDrivenScene
-    tts_client: object | None
+    tts_client: TTSClient | None
     current_interaction: str
 
 
@@ -96,7 +96,7 @@ class GameDrivenStage(SingleSceneStage):
         return lc.scene.scene_data if lc is not None else None
 
     @property
-    def tts_client(self) -> object | None:
+    def tts_client(self) -> TTSClient | None:
         if self._active_character is None:
             return None
         lc = self._characters.get(self._active_character)
