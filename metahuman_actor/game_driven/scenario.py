@@ -53,6 +53,7 @@ class GameDrivenScenario:
     default_character: str
     default_scene: str
     default_interaction: str
+    characters: list[str]
 
     @property
     def data_root(self) -> Path:
@@ -105,11 +106,21 @@ class GameDrivenScenario:
             raise GameDrivenScenarioNotFoundError(name)
         with open(config_path, encoding="utf-8") as f:
             config = json.load(f)
+        # Normalize the character set: an explicit "characters" list wins;
+        # otherwise fall back to the single "default_character" (back-compat).
+        characters = config.get("characters")
+        default_character = config.get("default_character")
+        if characters:
+            if not default_character:
+                default_character = characters[0]
+        else:
+            characters = [default_character]
         return cls(
             name=name,
-            default_character=config["default_character"],
+            default_character=default_character,
             default_scene=config["default_scene"],
             default_interaction=config["default_interaction"],
+            characters=list(characters),
         )
 
 

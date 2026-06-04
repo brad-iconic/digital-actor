@@ -97,3 +97,43 @@ def test_list_returns_scenarios_with_scenario_json(scenarios_root):
     (scenarios_root / "legacy").mkdir()  # no scenario.json -> excluded
     (scenarios_root / ".hidden").mkdir()
     assert list_game_driven_scenarios() == ["alpha", "bravo"]
+
+
+def test_characters_defaults_to_single_when_no_list(scenarios_root):
+    # _make_tree writes scenario.json with default_character only, no characters list.
+    _make_tree(scenarios_root)
+    s = GameDrivenScenario.load("tavern")
+    assert s.characters == ["zeek"]
+
+
+def test_characters_reads_explicit_list(scenarios_root):
+    import json
+    _make_tree(scenarios_root)
+    (scenarios_root / "tavern" / "scenario.json").write_text(
+        json.dumps({
+            "characters": ["dorn", "barkeep"],
+            "default_character": "dorn",
+            "default_scene": "scene_1",
+            "default_interaction": "converse",
+        }),
+        encoding="utf-8",
+    )
+    s = GameDrivenScenario.load("tavern")
+    assert s.characters == ["dorn", "barkeep"]
+    assert s.default_character == "dorn"
+
+
+def test_default_character_defaults_to_first_when_absent(scenarios_root):
+    import json
+    _make_tree(scenarios_root)
+    (scenarios_root / "tavern" / "scenario.json").write_text(
+        json.dumps({
+            "characters": ["dorn", "barkeep"],
+            "default_scene": "scene_1",
+            "default_interaction": "converse",
+        }),
+        encoding="utf-8",
+    )
+    s = GameDrivenScenario.load("tavern")
+    assert s.characters == ["dorn", "barkeep"]
+    assert s.default_character == "dorn"  # defaults to characters[0]
