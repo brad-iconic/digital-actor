@@ -21,8 +21,14 @@ def write_scenario_tree(
     scenes=("scene_1",),
     interactions=("converse",),
     with_triggers=True,
+    characters=(("zeek", "Zeek"),),
 ):
     """Create a game-driven scenario tree under <langfuse_root>/scenarios/<name>.
+
+    ``characters`` is a list of (id, display_name) tuples. Defaults to a single
+    zeek character so existing single-character tests are unaffected. Writes one
+    persona per character, a ``characters`` list in scenario.json, and per-scene
+    per-character per-interaction folders.
 
     The loader resolves scenarios under the local prompt root at scenarios/, and
     get_prompt resolves names like "scenarios/<name>/scene_1/..." to these files.
@@ -31,13 +37,15 @@ def write_scenario_tree(
     """
     scen = langfuse_root / "scenarios" / name
     (scen / "personas").mkdir(parents=True)
-    (scen / "personas" / "zeek.json").write_text(
-        json.dumps({"id": "zeek", "display_name": "Zeek"}), encoding="utf-8"
-    )
+    for cid, display in characters:
+        (scen / "personas" / f"{cid}.json").write_text(
+            json.dumps({"id": cid, "display_name": display}), encoding="utf-8"
+        )
     (scen / "scenario.json").write_text(
         json.dumps(
             {
-                "default_character": "zeek",
+                "characters": [cid for cid, _ in characters],
+                "default_character": characters[0][0],
                 "default_scene": scenes[0],
                 "default_interaction": interactions[0],
             }
@@ -48,30 +56,35 @@ def write_scenario_tree(
     for scene in scenes:
         (scen / scene).mkdir(parents=True, exist_ok=True)
         (scen / scene / "scene_description.txt").write_text(f"{scene} desc.", encoding="utf-8")
-        char = scen / scene / "characters" / "zeek"
-        char.mkdir(parents=True, exist_ok=True)
-        (char / "character_back_story.txt").write_text("Zeek is wary.", encoding="utf-8")
-        for interaction in interactions:
-            inter = char / interaction
-            inter.mkdir(parents=True, exist_ok=True)
-            (inter / "steer_back_instructions.txt").write_text(
-                f"{interaction} steer.", encoding="utf-8"
+        for cid, display in characters:
+            char = scen / scene / "characters" / cid
+            char.mkdir(parents=True, exist_ok=True)
+            (char / "character_back_story.txt").write_text(
+                f"{display} is wary.", encoding="utf-8"
             )
-            (inter / "opening_speech.txt").write_text("[Zeek]: Well met.", encoding="utf-8")
-            if with_triggers:
-                greet = inter / "triggers" / "greet"
-                greet.mkdir(parents=True)
-                (greet / "prompt.txt").write_text(
-                    "The player approaches. Greet them.", encoding="utf-8"
+            for interaction in interactions:
+                inter = char / interaction
+                inter.mkdir(parents=True, exist_ok=True)
+                (inter / "steer_back_instructions.txt").write_text(
+                    f"{interaction} steer.", encoding="utf-8"
                 )
-                weapon = inter / "triggers" / "player_drew_weapon"
-                weapon.mkdir(parents=True)
-                (weapon / "prompt.txt").write_text(
-                    "The player drew {{weapon}}. React.", encoding="utf-8"
+                (inter / "opening_speech.txt").write_text(
+                    f"[{display}]: Well met.", encoding="utf-8"
                 )
-                (weapon / "narrator.txt").write_text(
-                    "The player draws their {{weapon}}.", encoding="utf-8"
-                )
+                if with_triggers:
+                    greet = inter / "triggers" / "greet"
+                    greet.mkdir(parents=True)
+                    (greet / "prompt.txt").write_text(
+                        "The player approaches. Greet them.", encoding="utf-8"
+                    )
+                    weapon = inter / "triggers" / "player_drew_weapon"
+                    weapon.mkdir(parents=True)
+                    (weapon / "prompt.txt").write_text(
+                        "The player drew {{weapon}}. React.", encoding="utf-8"
+                    )
+                    (weapon / "narrator.txt").write_text(
+                        "The player draws their {{weapon}}.", encoding="utf-8"
+                    )
     return scen
 
 
