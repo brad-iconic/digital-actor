@@ -133,6 +133,11 @@ class MetaHumanServer(WebSocketServer):
                         )
                         continue
                     await ws.send(json.dumps({"type": "scenario_loaded", "name": name}))
+                    # The new game-driven client does not send start_game; deliver
+                    # the scene's authored opening line on load instead. Idempotent
+                    # (guarded by the scene's _opening_delivered) and a no-op when
+                    # there is no opening text.
+                    await self._stage.deliver_opening_speech()
                     continue
 
                 # All remaining message types require a loaded scenario.

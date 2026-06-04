@@ -225,3 +225,38 @@ async def test_respond_rejected_when_no_scenario(monkeypatch, tmp_path):
             for m in ws.sent
         )
         assert server._stage.scenario is None
+
+
+# ---------------------------------------------------------------------------
+# Task 2: load_scenario auto-delivers opening speech
+# ---------------------------------------------------------------------------
+
+
+async def test_load_scenario_auto_delivers_opening(monkeypatch, tmp_path):
+    from unittest.mock import AsyncMock
+
+    from langfuse_utils import fetch_all_prompts_from_project, langfuse_session
+
+    with langfuse_session(local=True):
+        fetch_all_prompts_from_project()
+        server = _make_empty_server(monkeypatch, tmp_path)
+
+        # Record delivery so we can confirm the opening was driven after the
+        # load completed and the scenario_loaded ack was queued.
+        order: list[str] = []
+
+        async def _record_opening() -> None:
+            order.append("opening_delivered")
+
+        server._stage.deliver_opening_speech = AsyncMock(side_effect=_record_opening)
+
+        ws = _FakeWS([{"type": "load_scenario", "name": "alt"}])
+        await server._handle_inbound(ws)
+
+        assert any(
+            m.get("type") == "scenario_loaded" and m.get("name") == "alt"
+            for m in ws.sent
+        )
+        server._stage.deliver_opening_speech.assert_awaited_once()
+        assert order == ["opening_delivered"]
+        assert server._stage.scenario.name == "alt"
