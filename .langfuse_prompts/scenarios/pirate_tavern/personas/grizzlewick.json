@@ -1,0 +1,9 @@
+{
+  "id": "grizzlewick",
+  "display_name": "Grizzlewick",
+  "voice": {
+    "provider": "omnivoice",
+    "voice_id": "default",
+    "model_id": "IconicAI/omnivoice_johnny_v1_step300"
+  }
+}
