@@ -211,7 +211,9 @@ class GameDrivenStage(SingleSceneStage):
         self.current_scene = scene
         logger.info("Scene -> %s (all interactions reset to %s)", scene, interaction)
 
-    async def set_interaction(self, npc: str, interaction: str) -> None:
+    async def set_interaction(self, npc: str, interaction: str) -> str:
+        """Switch one character's interaction. Returns the resolved character id
+        (uniform with respond/trigger, so callers don't re-resolve for echoes)."""
         if self._scenario is None:
             raise UnknownNpcError("no scenario loaded")
         cid = self._resolve_npc(npc)
@@ -224,6 +226,7 @@ class GameDrivenStage(SingleSceneStage):
         self._characters[cid].scene.scene_data = new_scene_data
         self._characters[cid].current_interaction = interaction
         logger.info("Interaction[%s] -> %s", cid, interaction)
+        return cid
 
     # --- routing ---
 

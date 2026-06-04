@@ -116,8 +116,7 @@ class GameDrivenServer(WebSocketServer):
             if msg_type == "set_interaction":
                 npc = (msg.get("npc") or "").strip()
                 interaction = (msg.get("interaction") or "").strip()
-                await stage.set_interaction(npc, interaction)
-                resolved = stage._resolve_npc(npc)
+                resolved = await stage.set_interaction(npc, interaction)
                 await ws.send(
                     json.dumps(
                         {
