@@ -260,3 +260,39 @@ async def test_load_scenario_auto_delivers_opening(monkeypatch, tmp_path):
         server._stage.deliver_opening_speech.assert_awaited_once()
         assert order == ["opening_delivered"]
         assert server._stage.scenario.name == "alt"
+
+
+# ---------------------------------------------------------------------------
+# Task 3: unload_scenario ack
+# ---------------------------------------------------------------------------
+
+
+async def test_unload_scenario_acks_and_empties_stage(monkeypatch, tmp_path):
+    from unittest.mock import AsyncMock
+
+    from langfuse_utils import fetch_all_prompts_from_project, langfuse_session
+
+    with langfuse_session(local=True):
+        fetch_all_prompts_from_project()
+        server = _make_empty_server(monkeypatch, tmp_path)
+        await server._stage.load_scenario("alt")
+        # Avoid driving real TTS/LLM if anything tries to.
+        server._stage.deliver_opening_speech = AsyncMock()
+        assert server._stage.scenario is not None
+        ws = _FakeWS([{"type": "unload_scenario"}])
+        await server._handle_inbound(ws)
+        assert any(m.get("type") == "scenario_unloaded" for m in ws.sent)
+        assert server._stage.scenario is None
+
+
+async def test_unload_scenario_on_empty_server_acks_no_error(monkeypatch, tmp_path):
+    from langfuse_utils import fetch_all_prompts_from_project, langfuse_session
+
+    with langfuse_session(local=True):
+        fetch_all_prompts_from_project()
+        server = _make_empty_server(monkeypatch, tmp_path)
+        ws = _FakeWS([{"type": "unload_scenario"}])
+        await server._handle_inbound(ws)
+        assert any(m.get("type") == "scenario_unloaded" for m in ws.sent)
+        assert not any(m.get("type") == "error" for m in ws.sent)
+        assert server._stage.scenario is None

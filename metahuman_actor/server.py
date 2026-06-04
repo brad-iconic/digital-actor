@@ -106,6 +106,11 @@ class MetaHumanServer(WebSocketServer):
                         )
                     )
                     continue
+                if msg_type == "unload_scenario":
+                    logger.info("<<< unload_scenario")
+                    await self._stage.unload_scenario()
+                    await ws.send(json.dumps({"type": "scenario_unloaded"}))
+                    continue
                 if msg_type == "load_scenario":
                     name = (msg.get("name") or "").strip()
                     persona_variant = msg.get("persona") or None
