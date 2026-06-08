@@ -142,7 +142,7 @@ class GameDrivenStage(SingleSceneStage):
         )
         if voice.get("provider"):
             logger.info(
-                "loading tts for %s (provider=%s model=%s) — may take up to a minute",
+                "loading tts for %s (provider=%s model=%s)",
                 cid,
                 voice.get("provider"),
                 voice.get("model_id"),
