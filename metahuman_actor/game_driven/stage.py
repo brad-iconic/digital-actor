@@ -140,15 +140,21 @@ class GameDrivenStage(SingleSceneStage):
         scene_data = GameDrivenSceneData.load(
             scenario, scene=scene, character=cid, interaction=interaction
         )
-        tts = (
-            get_tts_client(
+        if voice.get("provider"):
+            logger.info(
+                "loading tts for %s (provider=%s model=%s) — may take up to a minute",
+                cid,
+                voice.get("provider"),
+                voice.get("model_id"),
+            )
+            tts = get_tts_client(
                 voice.get("provider"),
                 voice_id=voice.get("voice_id"),
                 model_id=voice.get("model_id"),
             )
-            if voice.get("provider")
-            else None
-        )
+            logger.info("tts loaded for %s", cid)
+        else:
+            tts = None
         return LoadedCharacter(
             actor=actor,
             scene=GameDrivenScene(actor=actor, scene_data=scene_data),
