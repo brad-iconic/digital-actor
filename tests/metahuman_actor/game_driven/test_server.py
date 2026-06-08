@@ -200,3 +200,80 @@ async def test_multi_respond_unknown_npc_errors(multi_server):
         {"type": "respond", "npc": "ghost", "text": "hi", "world_state": {}}, ws
     )
     assert ws.sent[-1]["type"] == "error"
+
+
+@pytest.mark.asyncio
+async def test_warmup_tts_before_load_errors(server):
+    ws = FakeWS()
+    await server._handle_message({"type": "warmup_tts"}, ws)
+
+    assert ws.sent[-1]["type"] == "error"
+    assert not any(f["type"] == "tts_warmed_up" for f in ws.sent)
+    assert not any(f["type"] == "tts_warmup_complete" for f in ws.sent)
+
+
+@pytest.mark.asyncio
+async def test_warmup_tts_emits_per_character_then_complete_single(server):
+    ws = FakeWS()
+    await server._handle_message({"type": "load_scenario", "name": "tavern"}, ws)
+    pre_count = len(ws.sent)
+
+    await server._handle_message({"type": "warmup_tts"}, ws)
+
+    new_frames = ws.sent[pre_count:]
+    warmed = [f for f in new_frames if f["type"] == "tts_warmed_up"]
+    completes = [f for f in new_frames if f["type"] == "tts_warmup_complete"]
+
+    # Single-character `tavern` fixture has one character.
+    assert [f["npc"] for f in warmed] == ["zeek"]
+    assert len(completes) == 1
+    # tts_warmup_complete is the last warmup-related frame.
+    assert new_frames[-1]["type"] == "tts_warmup_complete"
+
+
+@pytest.mark.asyncio
+async def test_warmup_tts_emits_per_character_then_complete_multi(multi_server):
+    ws = FakeWS()
+    await multi_server._handle_message({"type": "load_scenario", "name": "tavern"}, ws)
+    pre_count = len(ws.sent)
+
+    await multi_server._handle_message({"type": "warmup_tts"}, ws)
+
+    new_frames = ws.sent[pre_count:]
+    warmed = [f for f in new_frames if f["type"] == "tts_warmed_up"]
+    completes = [f for f in new_frames if f["type"] == "tts_warmup_complete"]
+
+    # `multi_server` fixture loads dorn + barkeep in that insertion order.
+    assert [f["npc"] for f in warmed] == ["dorn", "barkeep"]
+    assert len(completes) == 1
+    assert new_frames[-1]["type"] == "tts_warmup_complete"
+
+
+@pytest.mark.asyncio
+async def test_warmup_tts_drives_generate_audio_on_each_client(multi_server):
+    """When TTS clients are present, warmup actually calls generate_audio."""
+
+    class _RecorderTTS:
+        def __init__(self):
+            self.calls: list[str] = []
+
+        @property
+        def sample_rate(self) -> int:
+            return 24000
+
+        async def generate_audio(self, text: str):
+            self.calls.append(text)
+            yield b"\x00\x00"
+
+    ws = FakeWS()
+    await multi_server._handle_message({"type": "load_scenario", "name": "tavern"}, ws)
+
+    dorn_rec = _RecorderTTS()
+    barkeep_rec = _RecorderTTS()
+    multi_server._stage._characters["dorn"].tts_client = dorn_rec
+    multi_server._stage._characters["barkeep"].tts_client = barkeep_rec
+
+    await multi_server._handle_message({"type": "warmup_tts"}, ws)
+
+    assert dorn_rec.calls == ["Warming up."]
+    assert barkeep_rec.calls == ["Warming up."]

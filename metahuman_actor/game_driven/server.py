@@ -5,6 +5,7 @@ set_interaction). Dialogue text/audio frames flow through the messenger's
 outbound drain (inherited from WebSocketServer); the new control/hint frames
 are sent directly over the socket here.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -128,6 +129,13 @@ class GameDrivenServer(WebSocketServer):
                 )
                 return
 
+            if msg_type == "warmup_tts":
+                for cid in stage.character_ids():
+                    await stage.warmup_character(cid)
+                    await ws.send(json.dumps({"type": "tts_warmed_up", "npc": cid}))
+                await ws.send(json.dumps({"type": "tts_warmup_complete"}))
+                return
+
             if msg_type == "respond":
                 npc = msg.get("npc")
                 text = (msg.get("text") or "").strip()
@@ -140,7 +148,10 @@ class GameDrivenServer(WebSocketServer):
                 request_followup = bool(msg.get("request_followup_hint", False))
                 emotions = msg.get("emotions")
                 resolved, hint = await stage.respond(
-                    npc, text, world_state, emotions=emotions,
+                    npc,
+                    text,
+                    world_state,
+                    emotions=emotions,
                     request_followup_hint=request_followup,
                 )
                 await self._maybe_send_hint(ws, resolved, hint)
@@ -153,7 +164,10 @@ class GameDrivenServer(WebSocketServer):
                 world_state = msg.get("world_state") or {}
                 request_followup = bool(msg.get("request_followup_hint", False))
                 resolved, hint = await stage.trigger(
-                    npc, name, info, world_state,
+                    npc,
+                    name,
+                    info,
+                    world_state,
                     request_followup_hint=request_followup,
                 )
                 await self._maybe_send_hint(ws, resolved, hint)
