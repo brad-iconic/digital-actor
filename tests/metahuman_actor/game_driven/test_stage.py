@@ -254,3 +254,54 @@ async def test_respond_history_isolated_per_character(multi_stage):
     barkeep_texts = [m.text for m in multi_stage._characters["barkeep"].actor.history.messages]
     assert "to dorn" in dorn_texts and "to barkeep" not in dorn_texts
     assert "to barkeep" in barkeep_texts and "to dorn" not in barkeep_texts
+
+
+class _RecorderTTS:
+    """TTS double that records every generate_audio call."""
+
+    def __init__(self):
+        self.calls: list[str] = []
+        self.chunks_yielded = 0
+
+    @property
+    def sample_rate(self) -> int:
+        return 24000
+
+    async def generate_audio(self, text: str):
+        self.calls.append(text)
+        self.chunks_yielded += 1
+        yield b"\x00\x00"
+
+
+@pytest.mark.asyncio
+async def test_warmup_character_drives_generate_audio(multi_stage):
+    await multi_stage.load_scenario("tavern")
+    recorder = _RecorderTTS()
+    # multi_stage fixture builds with tts_enabled=False, so tts_client is None;
+    # inject the recorder to assert generate_audio is actually driven.
+    multi_stage._characters["dorn"].tts_client = recorder
+
+    await multi_stage.warmup_character("dorn")
+
+    assert recorder.calls == ["Warming up."]
+    assert recorder.chunks_yielded == 1  # iterator was actually consumed
+
+
+@pytest.mark.asyncio
+async def test_warmup_character_noop_when_tts_client_is_none(multi_stage):
+    await multi_stage.load_scenario("tavern")
+    # Fixture builds with tts_enabled=False -> tts_client is already None.
+    assert multi_stage._characters["dorn"].tts_client is None
+
+    # Must not raise.
+    await multi_stage.warmup_character("dorn")
+
+
+@pytest.mark.asyncio
+async def test_warmup_character_unknown_cid_raises(multi_stage):
+    from metahuman_actor.game_driven.stage import UnknownNpcError
+
+    await multi_stage.load_scenario("tavern")
+
+    with pytest.raises(UnknownNpcError):
+        await multi_stage.warmup_character("ghost")

@@ -7,6 +7,7 @@ values; each request sets the active pointer to the addressed character before
 generating. Safe because the WS loop is sequential and each scene serializes its
 own generation — only one character generates at a time.
 """
+
 from __future__ import annotations
 
 import json
@@ -220,13 +221,32 @@ class GameDrivenStage(SingleSceneStage):
         if not self._scenario.has_interaction(self.current_scene, cid, interaction):
             raise UnknownInteractionError(interaction)
         new_scene_data = GameDrivenSceneData.load(
-            self._scenario, scene=self.current_scene, character=cid, interaction=interaction
+            self._scenario,
+            scene=self.current_scene,
+            character=cid,
+            interaction=interaction,
         )
         await self._characters[cid].scene.await_idle()
         self._characters[cid].scene.scene_data = new_scene_data
         self._characters[cid].current_interaction = interaction
         logger.info("Interaction[%s] -> %s", cid, interaction)
         return cid
+
+    async def warmup_character(self, cid: str) -> None:
+        """Drive a full TTS generate-pass for one character to prime the model.
+
+        Discards the PCM bytes. No-op if the character has no TTS client.
+
+        Raises:
+            UnknownNpcError: if cid isn't in the loaded character set.
+        """
+        if cid not in self._characters:
+            raise UnknownNpcError(cid)
+        lc = self._characters[cid]
+        if lc.tts_client is None:
+            return
+        async for _ in lc.tts_client.generate_audio("Warming up."):
+            pass
 
     # --- routing ---
 
