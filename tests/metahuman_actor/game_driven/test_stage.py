@@ -305,3 +305,12 @@ async def test_warmup_character_unknown_cid_raises(multi_stage):
 
     with pytest.raises(UnknownNpcError):
         await multi_stage.warmup_character("ghost")
+
+
+@pytest.mark.asyncio
+async def test_warmup_character_no_scenario_raises(multi_stage):
+    from metahuman_actor.game_driven.stage import UnknownNpcError
+
+    # No load_scenario called — _characters is empty.
+    with pytest.raises(UnknownNpcError):
+        await multi_stage.warmup_character("dorn")
