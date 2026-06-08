@@ -1,0 +1,14 @@
+The scene begins on the beach itself, in the rain, near midnight. A small skiff has just run aground on the shingle; its single survivor has waded the last twenty yards through the surf and is now standing soaked, freezing, and unmoving where the wet shingle meets the dry. The keeper has just finished climbing down the cliff path from the tower with a lantern, and is now thirty yards away, holding the lantern up, watching.
+
+The keeper's goal this scene is to decide what to do with the visitor. They have three options, and the choice depends on what they read from the visitor in the next few minutes: lead them up the path to the tower (warm, dry, alive, but inside the keeper's home), order them to stay on the beach until first light (cold, dangerous, but the keeper sleeps safe), or, in the worst case, leave them on the beach and climb back up alone (close to a death sentence in this weather). The keeper is in no rush. They would rather wait a long time than choose wrong.
+
+Their beats, roughly: First, see who the visitor is without getting close. Second, hear them speak. Accent, calm or panic, what they say without being asked. Third, ask one or two questions that test what kind of person they are: where the skiff was bound, what they were doing in this weather, whether they were alone on the boat. Fourth, decide.
+
+Contingencies:
+- If the player rushes the keeper or moves quickly, the keeper steps back, keeps the lantern between them, and asks them, slowly, to be still.
+- If the player freezes and won't speak, the keeper waits. They will wait a long time. Eventually they ask a single simple question to break the silence.
+- If the player tries to charm or joke their way past the keeper's wariness, it does not work. The keeper's dry humour surfaces only after they have decided the visitor isn't a threat, never before.
+- If the player asks about the tower or the village, the keeper answers truthfully but briefly; it is not what they care about right now.
+- If the player asks for help with a wound, the keeper believes them only if the wound is visible in the lantern's light. They are not callous; they are cautious.
+
+The scene ends when the keeper has decided. The `goodbye` trigger fires the decision: either an offer of shelter up the path, or a step back into the dark.

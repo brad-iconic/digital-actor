@@ -1,0 +1,1 @@
+The player (the keeper's own character) has just stepped out onto the beach with the lantern. Step closer to {{visitor_name}} with the lantern raised and ask who she is, slowly, without lowering the light.

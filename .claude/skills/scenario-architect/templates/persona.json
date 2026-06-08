@@ -1,0 +1,9 @@
+{
+  "id": "REPLACE_WITH_CHARACTER_ID",
+  "display_name": "REPLACE_WITH_DISPLAY_NAME",
+  "voice": {
+    "provider": "omnivoice",
+    "voice_id": "default",
+    "model_id": "IconicAI/omnivoice_johnny_v1_step300"
+  }
+}
