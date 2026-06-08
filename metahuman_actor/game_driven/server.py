@@ -130,9 +130,13 @@ class GameDrivenServer(WebSocketServer):
                 return
 
             if msg_type == "warmup_tts":
-                for cid in stage.character_ids():
+                cids = stage.character_ids()
+                for cid in cids:
+                    logger.info("warming up tts for %s", cid)
                     await stage.warmup_character(cid)
+                    logger.info("tts warmed: %s", cid)
                     await ws.send(json.dumps({"type": "tts_warmed_up", "npc": cid}))
+                logger.info("tts warmup complete (%d characters)", len(cids))
                 await ws.send(json.dumps({"type": "tts_warmup_complete"}))
                 return
 
