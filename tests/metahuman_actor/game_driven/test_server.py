@@ -277,3 +277,27 @@ async def test_warmup_tts_drives_generate_audio_on_each_client(multi_server):
 
     assert dorn_rec.calls == ["Warming up."]
     assert barkeep_rec.calls == ["Warming up."]
+
+
+@pytest.mark.asyncio
+async def test_warmup_tts_generate_audio_raises_sends_error_no_complete(multi_server):
+    """If generate_audio raises mid-loop, server emits error and skips tts_warmup_complete."""
+
+    class _RaisingTTS:
+        @property
+        def sample_rate(self) -> int:
+            return 24000
+
+        async def generate_audio(self, text: str):
+            raise RuntimeError("GPU OOM")
+            yield  # makes this an async-generator function (parser-level)
+
+    ws = FakeWS()
+    await multi_server._handle_message({"type": "load_scenario", "name": "tavern"}, ws)
+    multi_server._stage._characters["dorn"].tts_client = _RaisingTTS()
+
+    await multi_server._handle_message({"type": "warmup_tts"}, ws)
+
+    types = [f["type"] for f in ws.sent]
+    assert "error" in types
+    assert "tts_warmup_complete" not in types
