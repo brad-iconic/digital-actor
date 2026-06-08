@@ -1,1 +1,1 @@
-The visitor asks Owen to demonstrate his look-at system on {{target}}.
+The visitor asks Owen to look at {{target}}.
