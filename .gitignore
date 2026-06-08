@@ -248,3 +248,4 @@ docs/*.PNG
 !/assets/**/
 !/assets/**/*.dvc
 !/assets/.gitignore
+.claude/settings.local.json
