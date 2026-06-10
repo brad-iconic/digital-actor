@@ -1,0 +1,9 @@
+{
+  "id": "Owen",
+  "display_name": "Owen",
+  "voice": {
+    "provider": "omnivoice",
+    "voice_id": "default",
+    "model_id": "IconicAI/omnivoice_johnny_v1_step300"
+  }
+}

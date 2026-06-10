@@ -1,0 +1,9 @@
+{
+  "id": "grog",
+  "display_name": "Grog",
+  "voice": {
+    "provider": "elevenlabs",
+    "voice_id": "QzD8JR9v8A4kqCDL8XD4",
+    "model_id": "eleven_turbo_v2_5"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "id": "grizzlewick",
+  "display_name": "Grizzlewick",
+  "voice": {
+    "provider": "elevenlabs",
+    "voice_id": "OTMqA7lryJHXgAnPIQYt",
+    "model_id": "eleven_turbo_v2_5"
+  }
+}

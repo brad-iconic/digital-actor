@@ -1,4 +1,4 @@
-.claude/
+# .claude/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -248,3 +248,4 @@ docs/*.PNG
 !/assets/**/
 !/assets/**/*.dvc
 !/assets/.gitignore
+.claude/settings.local.json

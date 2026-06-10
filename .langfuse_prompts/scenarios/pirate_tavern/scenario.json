@@ -1,0 +1,6 @@
+{
+  "characters": ["dorn", "grizzlewick", "grog", "tog"],
+  "default_character": "grizzlewick",
+  "default_scene": "scene_1",
+  "default_interaction": "converse"
+}

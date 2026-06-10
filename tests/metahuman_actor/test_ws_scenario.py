@@ -165,3 +165,162 @@ async def test_load_scenario_empty_name_returns_error(monkeypatch, tmp_path):
             for m in ws.sent
         )
         assert server._stage.scenario is None
+
+
+# ---------------------------------------------------------------------------
+# Task 1: respond -> on_user_input
+# ---------------------------------------------------------------------------
+
+
+async def test_respond_translates_to_on_user_input(monkeypatch, tmp_path):
+    from unittest.mock import AsyncMock
+
+    from langfuse_utils import fetch_all_prompts_from_project, langfuse_session
+
+    with langfuse_session(local=True):
+        fetch_all_prompts_from_project()
+        server = _make_empty_server(monkeypatch, tmp_path)
+        await server._stage.load_scenario("alt")
+        server._stage.on_user_input = AsyncMock()
+        ws = _FakeWS([{"type": "respond", "text": "hello there"}])
+        await server._handle_inbound(ws)
+        server._stage.on_user_input.assert_awaited_once_with("hello there")
+        assert not any(m.get("type") == "error" for m in ws.sent)
+
+
+async def test_respond_with_whitespace_is_rejected(monkeypatch, tmp_path):
+    from unittest.mock import AsyncMock
+
+    from langfuse_utils import fetch_all_prompts_from_project, langfuse_session
+
+    with langfuse_session(local=True):
+        fetch_all_prompts_from_project()
+        server = _make_empty_server(monkeypatch, tmp_path)
+        await server._stage.load_scenario("alt")
+        server._stage.on_user_input = AsyncMock()
+        ws = _FakeWS([{"type": "respond", "text": "   "}])
+        await server._handle_inbound(ws)
+        server._stage.on_user_input.assert_not_awaited()
+        assert any(
+            m.get("type") == "error" and "empty text" in m.get("message", "")
+            for m in ws.sent
+        )
+
+
+async def test_respond_rejected_when_no_scenario(monkeypatch, tmp_path):
+    from unittest.mock import AsyncMock
+
+    from langfuse_utils import fetch_all_prompts_from_project, langfuse_session
+
+    with langfuse_session(local=True):
+        fetch_all_prompts_from_project()
+        server = _make_empty_server(monkeypatch, tmp_path)
+        server._stage.on_user_input = AsyncMock()
+        ws = _FakeWS([{"type": "respond", "text": "hello"}])
+        await server._handle_inbound(ws)
+        server._stage.on_user_input.assert_not_awaited()
+        assert any(
+            m.get("type") == "error"
+            and "no scenario loaded" in m.get("message", "")
+            for m in ws.sent
+        )
+        assert server._stage.scenario is None
+
+
+# ---------------------------------------------------------------------------
+# Task 2: load_scenario auto-delivers opening speech
+# ---------------------------------------------------------------------------
+
+
+async def test_load_scenario_auto_delivers_opening(monkeypatch, tmp_path):
+    from unittest.mock import AsyncMock
+
+    from langfuse_utils import fetch_all_prompts_from_project, langfuse_session
+
+    with langfuse_session(local=True):
+        fetch_all_prompts_from_project()
+        server = _make_empty_server(monkeypatch, tmp_path)
+
+        # Record delivery so we can confirm the opening was driven after the
+        # load completed and the scenario_loaded ack was queued.
+        order: list[str] = []
+
+        async def _record_opening() -> None:
+            order.append("opening_delivered")
+
+        server._stage.deliver_opening_speech = AsyncMock(side_effect=_record_opening)
+
+        ws = _FakeWS([{"type": "load_scenario", "name": "alt"}])
+        await server._handle_inbound(ws)
+
+        assert any(
+            m.get("type") == "scenario_loaded" and m.get("name") == "alt"
+            for m in ws.sent
+        )
+        server._stage.deliver_opening_speech.assert_awaited_once()
+        assert order == ["opening_delivered"]
+        assert server._stage.scenario.name == "alt"
+
+
+# ---------------------------------------------------------------------------
+# Task 3: unload_scenario ack
+# ---------------------------------------------------------------------------
+
+
+async def test_unload_scenario_acks_and_empties_stage(monkeypatch, tmp_path):
+    from unittest.mock import AsyncMock
+
+    from langfuse_utils import fetch_all_prompts_from_project, langfuse_session
+
+    with langfuse_session(local=True):
+        fetch_all_prompts_from_project()
+        server = _make_empty_server(monkeypatch, tmp_path)
+        await server._stage.load_scenario("alt")
+        # Avoid driving real TTS/LLM if anything tries to.
+        server._stage.deliver_opening_speech = AsyncMock()
+        assert server._stage.scenario is not None
+        ws = _FakeWS([{"type": "unload_scenario"}])
+        await server._handle_inbound(ws)
+        assert any(m.get("type") == "scenario_unloaded" for m in ws.sent)
+        assert server._stage.scenario is None
+
+
+async def test_unload_scenario_on_empty_server_acks_no_error(monkeypatch, tmp_path):
+    from langfuse_utils import fetch_all_prompts_from_project, langfuse_session
+
+    with langfuse_session(local=True):
+        fetch_all_prompts_from_project()
+        server = _make_empty_server(monkeypatch, tmp_path)
+        ws = _FakeWS([{"type": "unload_scenario"}])
+        await server._handle_inbound(ws)
+        assert any(m.get("type") == "scenario_unloaded" for m in ws.sent)
+        assert not any(m.get("type") == "error" for m in ws.sent)
+        assert server._stage.scenario is None
+
+
+# ---------------------------------------------------------------------------
+# Task 4: set_scene / set_interaction are silently ignored (regression pin)
+# ---------------------------------------------------------------------------
+
+
+async def test_set_scene_and_set_interaction_are_ignored(monkeypatch, tmp_path):
+    from unittest.mock import AsyncMock
+
+    from langfuse_utils import fetch_all_prompts_from_project, langfuse_session
+
+    with langfuse_session(local=True):
+        fetch_all_prompts_from_project()
+        server = _make_empty_server(monkeypatch, tmp_path)
+        await server._stage.load_scenario("alt")
+        server._stage.deliver_opening_speech = AsyncMock()
+        ws = _FakeWS(
+            [
+                {"type": "set_scene", "scene": "scene_2"},
+                {"type": "set_interaction", "npc": "zeek", "interaction": "barter"},
+            ]
+        )
+        # Must not raise; these fall through to _dispatch which logs an unknown
+        # message type and sends nothing.
+        await server._handle_inbound(ws)
+        assert not any(m.get("type") == "scene_changed" for m in ws.sent)
+        assert not any(m.get("type") == "interaction_changed" for m in ws.sent)

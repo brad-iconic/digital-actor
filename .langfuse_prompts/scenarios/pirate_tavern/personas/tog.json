@@ -1,0 +1,9 @@
+{
+  "id": "tog",
+  "display_name": "Tog",
+  "voice": {
+    "provider": "elevenlabs",
+    "voice_id": "qNkzaJoHLLdpvgh5tISm",
+    "model_id": "eleven_turbo_v2_5"
+  }
+}

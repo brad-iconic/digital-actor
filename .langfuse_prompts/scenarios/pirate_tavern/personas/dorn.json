@@ -1,0 +1,9 @@
+{
+  "id": "dorn",
+  "display_name": "Dorn",
+  "voice": {
+    "provider": "elevenlabs",
+    "voice_id": "goT3UYdM9bhm0n2lmKQx",
+    "model_id": "eleven_turbo_v2_5"
+  }
+}

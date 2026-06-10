@@ -1,0 +1,9 @@
+{
+  "id": "zeek",
+  "display_name": "Zeek",
+  "voice": {
+    "provider": "omnivoice",
+    "voice_id": "default",
+    "model_id": "IconicAI/omnivoice_johnny_v1_step300"
+  }
+}

@@ -6,6 +6,7 @@ from app_logging import get_logger
 from digital_actor.data_models import PromptInfo
 from digital_actor.dialogue import NARRATOR_ROLE_NAME, PLAYER_ROLE_NAME, DialogueLine
 from digital_actor.scene import SingleActorScene
+from digital_actor.stage_context import stage_context
 from langfuse_utils import get_prompt, langfuse_observation
 
 from metahuman_actor.actor import MetaHumanDigitalActor
@@ -46,7 +47,20 @@ class MetaHumanSingleActorScene(SingleActorScene):
         # instead of interleaving its TTS chunks on the outbound queue.
         async with self._response_lock:
             self._opening_delivered = True
-            await self.actor.deliver_opening_speech(text)
+            speech_started_at = stage_context.elapsed_time
+            line = await self.actor.deliver_opening_speech(text)
+            # The game-driven client does not send audio_finished, so
+            # on_audio_finished never fires to set speak_end_elapsed for the
+            # opening line. Anchor the idle/followup clock on the server-side
+            # playback estimate (same approach as generate_actor_response);
+            # without this, tick() never starts counting idle after the opening
+            # line and the actor falls silent. A later audio_finished (if any
+            # client sends one) still overrides this via on_audio_finished.
+            self.actor.speak_end_elapsed = (
+                speech_started_at
+                + line.audio_duration_sec
+                + self.playback_end_buffer_sec
+            )
 
     async def generate_actor_response(
         self,

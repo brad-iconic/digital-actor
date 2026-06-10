@@ -1,0 +1,9 @@
+{
+  "id": "Owen",
+  "display_name": "Owen",
+  "voice": {
+    "provider": "elevenlabs",
+    "voice_id": "QzTKubutNn9TjrB7Xb2Q",
+    "model_id": "eleven_turbo_v2_5"
+  }
+}
